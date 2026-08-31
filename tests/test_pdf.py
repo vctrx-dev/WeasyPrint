@@ -796,6 +796,180 @@ def test_pdf_tags_anonymous_table_cells():
     assert pdf.count(b'/TD') == 1
 
 
+def _pdf_structure_objects(pdf):
+    return {
+        b'%s 0 R' % reference: body
+        for reference, body in re.findall(
+            rb'(\d+) 0 obj\n(.*?)\nendobj', pdf, re.S)}
+
+
+def _assert_table_cells_are_row_children(pdf, expected_count):
+    """Return table cell elements and ensure anonymous boxes are not cells."""
+    objects = _pdf_structure_objects(pdf)
+    cells = [
+        (reference, body) for reference, body in objects.items()
+        if re.search(rb'/S /(TD|TH)(?:/|>>)', body)]
+    assert len(cells) == expected_count
+    for _, body in cells:
+        parent_reference = re.search(rb'/P (\d+ 0 R)', body).group(1)
+        assert re.search(rb'/S /TR(?:/|>>)', objects[parent_reference])
+    return objects, cells
+
+
+def _structure_descendant_roles(objects, reference):
+    body = objects[reference]
+    children = re.search(rb'/K \[([^]]*)\]', body)
+    if children is None:
+        return
+    for child_reference in re.findall(rb'\d+ 0 R', children.group(1)):
+        child = objects[child_reference]
+        if match := re.search(rb'/S /(\w+)(?:/|>>)', child):
+            yield match.group(1)
+        yield from _structure_descendant_roles(objects, child_reference)
+
+
+@pytest.mark.parametrize(
+    ('cell_tag', 'attributes', 'content', 'content_role'), [
+        ('td', '', '<p>paragraph</p>', b'P'),
+        ('td', '', '<div>division</div>', b'Div'),
+        ('td', '', '<span style="display:block">span</span>', b'Span'),
+        ('th', ' scope="col"', '<p>paragraph</p>', b'P'),
+        ('th', ' scope="col"', '<div>division</div>', b'Div'),
+        ('th', ' scope="col"', '<span style="display:block">span</span>', b'Span'),
+        ('td', '', 'before <p>first <span>second</span> third</p> after', b'P'),
+    ])
+@assert_no_logs
+def test_pdf_tags_table_cell_block_children_are_not_nested(
+        cell_tag, attributes, content, content_role):
+    """Keep one source cell when a cell has native block descendants."""
+    pdf = FakeHTML(string=f'''
+      <html lang="en"><table><tr>
+        <{cell_tag}{attributes}>{content}</{cell_tag}>
+      </tr></table></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+
+    objects, cells = _assert_table_cells_are_row_children(pdf, 1)
+    assert len(re.findall(rb'/S /Table(?:/|>>)', pdf)) == 1
+    assert re.search(fr'/S /{cell_tag.upper()}(?:/|>>)'.encode(), cells[0][1])
+    if cell_tag == 'th':
+        assert b'/Scope /Column' in cells[0][1]
+    assert content_role in set(_structure_descendant_roles(objects, cells[0][0]))
+
+
+@assert_no_logs
+def test_pdf_tags_block_table_cells_keep_spans_and_headers():
+    pdf = FakeHTML(string='''
+      <html lang="en"><table>
+        <thead><tr>
+          <th id="first" scope="col"><div>first</div></th>
+          <th id="second" scope="col"><span style="display:block">second</span></th>
+          <th id="third" scope="col"><p>third</p></th>
+        </tr></thead>
+        <tbody>
+          <tr>
+            <td headers="first" rowspan="2"><div>rowspan</div></td>
+            <td headers="second" colspan="2"><p>colspan</p></td>
+          </tr>
+          <tr>
+            <td headers="second"><span style="display:block">second row</span></td>
+            <td headers="third"><div>last</div></td>
+          </tr>
+        </tbody>
+      </table></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+
+    objects, cells = _assert_table_cells_are_row_children(pdf, 7)
+    table_reference, _ = next(
+        (reference, body) for reference, body in objects.items()
+        if re.search(rb'/S /Table(?:/|>>)', body))
+    headers = [
+        (reference, body) for reference, body in cells
+        if re.search(rb'/S /TH(?:/|>>)', body)]
+    data_cells = [
+        body for _, body in cells if re.search(rb'/S /TD(?:/|>>)', body)]
+    header_ids = [
+        (reference, re.search(rb'/ID \(([^)]*)\)', header).group(1))
+        for reference, header in headers]
+    data_header_ids = [
+        re.findall(rb'\(([^)]*)\)', re.search(
+            rb'/Headers \[([^]]*)\]', cell).group(1))
+        for cell in data_cells]
+    assert len(headers) == 3
+    assert len(data_cells) == 4
+    assert [
+        role for role in _structure_descendant_roles(objects, table_reference)
+        if role in (b'TH', b'TD')
+    ] == [b'TH', b'TH', b'TH', b'TD', b'TD', b'TD', b'TD']
+    assert all(b'/Scope /Column' in body for _, body in headers)
+    assert b'/RowSpan 2' in pdf
+    assert b'/ColSpan 2' in pdf
+    assert data_header_ids == [
+        [header_ids[0][1]], [header_ids[1][1]], [header_ids[1][1]],
+        [header_ids[2][1]]]
+    structure_root = next(
+        body for body in objects.values() if b'/Type /StructTreeRoot' in body)
+    id_tree_reference = re.search(
+        rb'/IDTree (\d+ 0 R)', structure_root).group(1)
+    id_tree = objects[id_tree_reference]
+    assert all(
+        b'(' + header_id + b') ' + header_reference in id_tree
+        for header_reference, header_id in header_ids)
+
+
+@assert_no_logs
+def test_pdf_tags_fragmented_block_table_cells_keep_one_logical_table():
+    rows = ''.join(
+        f'<tr><td headers="header">before <p>row {index} '
+        f'<span>inline</span></p> after</td></tr>'
+        for index in range(8))
+    pdf = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 120px; margin: 5px }}
+          td, th {{ height: 28px; padding: 1px }}
+        </style>
+        <table>
+          <thead><tr><th id="header" scope="col">
+            <div>header <span>text</span></div>
+          </th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+
+    objects, cells = _assert_table_cells_are_row_children(pdf, 9)
+    table_reference, _ = next(
+        (reference, body) for reference, body in objects.items()
+        if re.search(rb'/S /Table(?:/|>>)', body))
+    headers = [
+        (reference, body) for reference, body in cells
+        if re.search(rb'/S /TH(?:/|>>)', body)]
+    data_cells = [
+        (reference, body) for reference, body in cells
+        if re.search(rb'/S /TD(?:/|>>)', body)]
+    header_id = re.search(rb'/ID \(([^)]*)\)', headers[0][1]).group(1)
+    page_count = len(re.findall(rb'/Type /Page\b', pdf))
+    assert page_count > 1
+    assert len(re.findall(rb'/S /Table(?:/|>>)', pdf)) == 1
+    assert len(re.findall(rb'/S /THead(?:/|>>)', pdf)) == 1
+    assert len(re.findall(rb'/S /TBody(?:/|>>)', pdf)) == 1
+    assert len(headers) == 1
+    assert len(data_cells) == 8
+    assert [
+        role for role in _structure_descendant_roles(objects, table_reference)
+        if role in (b'TH', b'TD')
+    ] == [b'TH'] + [b'TD'] * 8
+    assert b'Div' in set(_structure_descendant_roles(objects, headers[0][0]))
+    assert all(
+        b'P' in set(_structure_descendant_roles(objects, reference))
+        for reference, _ in data_cells)
+    assert all(
+        b'/Headers [(' + header_id + b')]' in cell
+        for _, cell in data_cells)
+    assert pdf.count(b'/Artifact\nBMC') >= page_count - 1
+    assert b'/ParentTree ' in pdf
+
+
 @assert_no_logs
 def test_pdf_tags_split_table_with_caption():
     # Regression test for #2761.
