@@ -859,6 +859,231 @@ def test_pdf_tags_table_headers():
     assert f'[({id}-4-0) ({id}-0-1) ({id}-0-2) ({id}-0-3)]'.encode() in pdf
 
 
+def test_pdf_tags_explicit_table_headers_invalid_tokens():
+    pdf = FakeHTML(string='''
+      <html lang="en"><table><tr>
+        <th id="row" scope="row">Row</th>
+        <th id="column" scope="col">Column<span id="not-a-header"></span></th>
+        <td headers="column unknown not-a-header row column">partial</td>
+        <td headers="">empty</td>
+      </tr></table>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    table_id = re.findall(b'(.+) 0 obj\n.*/S /Table', pdf)[0].decode()
+    assert f'/Headers [({table_id}-0-1) ({table_id}-0-0)]'.encode() in pdf
+    assert pdf.count(b'/Headers []') == 1
+
+
+@pytest.mark.parametrize(('table', 'cell_count'), [
+    ('''
+      <table><tr><th scope="ROW">row</th><td>row data</td></tr></table>
+    ''', 1),
+    ('''
+      <table><tbody>
+        <tr><th scope="rowgroup" rowspan="2">row group</th><td>1</td></tr>
+        <tr><td>2</td></tr>
+      </tbody></table>
+    ''', 2),
+    ('''
+      <table>
+        <tr><th scope="colgroup" colspan="2">column group</th></tr>
+        <tr><td>3</td><td>4</td></tr>
+      </table>
+    ''', 2),
+])
+def test_pdf_tags_table_header_scope_associations(table, cell_count):
+    pdf = FakeHTML(string=f'''
+      <html lang="en">{table}</html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    header_ids = [
+        re.search(rb'/ID \(([^)]*)\)', body).group(1)
+        for body in objects if re.search(rb'/S /TH(?:/|>>)', body)]
+    table_cells = [
+        body for body in objects if re.search(rb'/S /TD(?:/|>>)', body)]
+    assert len(header_ids) == 1
+    assert len(table_cells) == cell_count
+    expected_headers = [header_ids[0]] * cell_count
+    actual_headers = [
+        match.group(1) if (
+            match := re.search(rb'/Headers \[\(([^)]*)\)\]', body)) else None
+        for body in table_cells]
+    assert actual_headers == expected_headers
+
+
+def test_pdf_tags_explicit_table_headers_across_pages():
+    rows = ''.join(
+        f'<tr><td headers="header">row {index}</td></tr>'
+        for index in range(8))
+    pdf = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 120px; margin: 5px }}
+          td, th {{ height: 35px }}
+        </style>
+        <table><tbody>
+          <tr><th id="header" scope="col">header</th></tr>
+          {rows}
+        </tbody></table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    header_id = next(
+        re.search(rb'/ID \(([^)]*)\)', body).group(1)
+        for body in objects if re.search(rb'/S /TH(?:/|>>)', body))
+    table_cells = [
+        body for body in objects if re.search(rb'/S /TD(?:/|>>)', body)]
+    assert len(table_cells) == 8
+    assert all(
+        b'/Headers [(' + header_id + b')]' in body
+        for body in table_cells)
+
+
+def test_pdf_tags_explicit_table_headers_prefer_current_page():
+    rows = ''.join(
+        f'<tr><td headers="header">row {index}</td></tr>'
+        for index in range(8))
+    pdf = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 120px; margin: 5px }}
+          td, th {{ height: 35px }}
+        </style>
+        <table>
+          <thead><tr><th id="header" scope="col">header</th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    header_ids = {
+        re.search(rb'/ID \(([^)]*)\)', body).group(1)
+        for body in objects if re.search(rb'/S /TH(?:/|>>)', body)}
+    referenced_ids = {
+        match.group(1)
+        for body in objects if re.search(rb'/S /TD(?:/|>>)', body)
+        if (match := re.search(rb'/Headers \[\(([^)]*)\)\]', body))}
+    assert len(header_ids) > 1
+    assert referenced_ids == header_ids
+
+
+def test_pdf_tags_explicit_table_headers_stay_in_table():
+    pdf = FakeHTML(string='''
+      <html lang="en">
+        <table><tr><th id="header">first</th><td headers="header">1</td></tr></table>
+        <table><tr><td headers="header">2</td></tr></table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    table_cells = [
+        body for body in objects if re.search(rb'/S /TD(?:/|>>)', body)]
+    assert len(table_cells) == 2
+    assert b'/Headers []' not in table_cells[0]
+    assert b'/Headers []' in table_cells[1]
+
+
+def test_pdf_tags_table_header_scopes():
+    pdf = FakeHTML(string='''
+      <html lang="en"><table><tr>
+        <th scope="row">row</th>
+        <th scope="rowgroup">rowgroup</th>
+        <th scope="col">column</th>
+        <th scope="colgroup">colgroup</th>
+      </tr></table>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    table_id = re.findall(b'(.+) 0 obj\n.*/S /Table', pdf)[0].decode()
+    header_objects = {
+        re.search(rb'/ID \(([^)]*)\)', body).group(1): body
+        for body in re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+        if re.search(rb'/S /TH(?:/|>>)', body)
+    }
+    assert b'/Scope /Row' in header_objects[f'{table_id}-0-0'.encode()]
+    assert b'/Scope' not in header_objects[f'{table_id}-0-1'.encode()]
+    assert b'/Scope /Column' in header_objects[f'{table_id}-0-2'.encode()]
+    assert b'/Scope' not in header_objects[f'{table_id}-0-3'.encode()]
+    assert b'/Scope /RowGroup' not in pdf
+    assert b'/Scope /ColumnGroup' not in pdf
+
+
+def test_pdf_tags_grouped_table_with_block_header_content():
+    pdf = FakeHTML(filename=resource_path(
+        'paperlyft_campaign_transactions.html')).write_pdf(pdf_tags=True)
+
+    assert pdf.count(b'/RowSpan 2') == 4
+    assert pdf.count(b'/ColSpan 2') == 1
+    assert pdf.count(b'/ColSpan 3') == 1
+    assert pdf.count(b'/ColSpan 4') == 1
+
+    objects = {
+        int(number): body for number, body in re.findall(
+            rb'(\d+) 0 obj\n(.*?)\nendobj', pdf, re.S)
+    }
+    header_ids = []
+    for body in objects.values():
+        if not re.search(rb'/S /TH(?:/|>>)', body):
+            continue
+        parent_number = int(re.search(rb'/P (\d+) 0 R', body).group(1))
+        assert re.search(rb'/S /TR(?:/|>>)', objects[parent_number])
+        header_ids.append(re.search(rb'/ID \(([^)]*)\)', body).group(1))
+
+    assert len(header_ids) == 12
+    assert [pdf.count(b'(' + id + b')') for id in header_ids] == [
+        1, 13, 11, 6, 5, 5, 5, 6, 6, 13, 13, 4]
+
+
+@pytest.mark.parametrize(('filename', 'table_count'), [
+    ('paperlyft_reporting_period_summary.html', 2),
+    ('paperlyft_income_expense_ledger.html', 1),
+    ('paperlyft_real_property_disclosure.html', 1),
+    ('paperlyft_campaign_transactions.html', 1),
+    ('paperlyft_schedule_b1_disbursements.html', 1),
+])
+def test_pdf_tags_paperlyft_table_fixture_contract(filename, table_count):
+    html = FakeHTML(filename=resource_path(filename))
+    source_cells = [
+        element for element in html.etree_element.iter()
+        if element.tag.rsplit('}', 1)[-1] in ('th', 'td')]
+    source_headers = [
+        element for element in source_cells
+        if element.tag.rsplit('}', 1)[-1] == 'th']
+    source_data = [
+        element for element in source_cells
+        if element.tag.rsplit('}', 1)[-1] == 'td']
+    pdf = html.write_pdf(pdf_tags=True)
+    objects = {
+        int(number): body for number, body in re.findall(
+            rb'(\d+) 0 obj\n(.*?)\nendobj', pdf, re.S)
+    }
+    found_tables = 0
+    table_cells = []
+    for body in objects.values():
+        if re.search(rb'/S /Table(?:/|>>)', body):
+            found_tables += 1
+        if re.search(rb'/S /TH(?:/|>>)', body):
+            parent_number = int(re.search(rb'/P (\d+) 0 R', body).group(1))
+            assert re.search(rb'/S /TR(?:/|>>)', objects[parent_number])
+        if re.search(rb'/S /TD(?:/|>>)', body):
+            table_cells.append(body)
+
+    assert found_tables == table_count
+    assert table_cells
+    pdf_header_ids = [
+        re.search(rb'/ID \(([^)]*)\)', body).group(1)
+        for body in objects.values()
+        if re.search(rb'/S /TH(?:/|>>)', body)]
+    assert len(pdf_header_ids) == len(source_headers)
+    source_to_pdf_id = {
+        source_header.attrib['id']: pdf_header_id
+        for source_header, pdf_header_id in zip(source_headers, pdf_header_ids)}
+    expected_headers = [
+        [source_to_pdf_id[token] for token in source_cell.attrib['headers'].split()]
+        for source_cell in source_data]
+    actual_headers = [
+        re.findall(rb'\(([^)]*)\)', re.search(
+            rb'/Headers \[([^]]*)\]', body).group(1))
+        for body in table_cells]
+    assert actual_headers == expected_headers
+
+
 @pytest.mark.parametrize(('html', 'fields'), [
     ('<input>', ['/Tx', '/V ()']),
     ('<input value="">', ['/Tx', '/V ()']),

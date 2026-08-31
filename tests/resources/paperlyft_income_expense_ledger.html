@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en-US">
+<head>
+  <meta charset="utf-8">
+  <title>Income and expense transaction ledger fixture</title>
+  <style>
+    @page { size: Letter landscape; margin: 0.32in 0.36in; }
+    * { box-sizing: border-box; }
+    html { color: #000; font-family: "DejaVu Sans", sans-serif; font-size: 6.3pt; line-height: 1.08; }
+    body { margin: 0; }
+    .header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 7pt; }
+    h1 { margin: 0; font-size: 12pt; font-weight: 500; }
+    .balance { margin-top: 3pt; font-size: 8pt; }
+    .period { text-align: right; }
+    .period strong { display: block; margin-top: 2pt; font-size: 8pt; font-weight: 400; }
+    table { width: 100%; border: 0.9pt solid #000; border-collapse: collapse; table-layout: fixed; }
+    caption { margin-bottom: 4pt; font-size: 7pt; font-weight: 700; text-align: left; text-transform: uppercase; }
+    th, td { border: 0.4pt solid #000; padding: 2.2pt 2.5pt; vertical-align: middle; }
+    thead th { font-size: 5.6pt; font-weight: 600; text-align: center; }
+    tbody th { font-weight: 400; text-align: left; }
+    .company { width: 15%; }
+    .address { width: 20%; }
+    .occupation { width: 12%; }
+    .type { width: 11%; }
+    .date { width: 10%; }
+    .money { width: 9%; text-align: right; }
+    .payment { width: 14%; }
+    tbody tr { height: 18pt; }
+    .empty { color: transparent; }
+    .page-number { margin-top: 5pt; font-size: 6pt; text-align: right; }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="header">
+      <div><h1>2024 Income and Expenses</h1><div class="balance">Beginning balance: $18,520.25</div></div>
+      <div class="period">October 2024<strong>Report date: 10/24/2024</strong></div>
+    </header>
+
+    <table>
+      <caption>Transaction register</caption>
+      <colgroup><col class="company"><col class="address"><col class="occupation"><col class="type"><col class="date"><col class="money"><col class="money"><col class="payment"></colgroup>
+      <thead>
+        <tr>
+          <th id="ledger-company" scope="col">Company or person</th>
+          <th id="ledger-address" scope="col">Address</th>
+          <th id="ledger-occupation" scope="col">Occupation</th>
+          <th id="ledger-type" scope="col">Transaction type</th>
+          <th id="ledger-date" scope="col">Deposit or payment date</th>
+          <th id="ledger-income" scope="col">Income</th>
+          <th id="ledger-expense" scope="col">Expense</th>
+          <th id="ledger-payment" scope="col">Payment type</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><th id="ledger-r1" scope="row">Pete's Promotions</th><td headers="ledger-r1 ledger-address"></td><td headers="ledger-r1 ledger-occupation"></td><td headers="ledger-r1 ledger-type">Donation</td><td headers="ledger-r1 ledger-date">10/01/2024</td><td headers="ledger-r1 ledger-income">$200.00</td><td headers="ledger-r1 ledger-expense"></td><td headers="ledger-r1 ledger-payment">Check 449</td></tr>
+        <tr><th id="ledger-r2" scope="row">Gayle K. Haro</th><td headers="ledger-r2 ledger-address"></td><td headers="ledger-r2 ledger-occupation">Retired</td><td headers="ledger-r2 ledger-type">Donation</td><td headers="ledger-r2 ledger-date">10/01/2024</td><td headers="ledger-r2 ledger-income">$100.00</td><td headers="ledger-r2 ledger-expense"></td><td headers="ledger-r2 ledger-payment">Check 4063</td></tr>
+        <tr><th id="ledger-r3" scope="row">Brad McIntyre</th><td headers="ledger-r3 ledger-address">13350 S Sunland Gin Rd, Arizona City</td><td headers="ledger-r3 ledger-occupation">Retired</td><td headers="ledger-r3 ledger-type">Donation</td><td headers="ledger-r3 ledger-date">10/01/2024</td><td headers="ledger-r3 ledger-income">$100.00</td><td headers="ledger-r3 ledger-expense"></td><td headers="ledger-r3 ledger-payment">Check 1160</td></tr>
+        <tr><th id="ledger-r4" scope="row">Douglas Wolf</th><td headers="ledger-r4 ledger-address"></td><td headers="ledger-r4 ledger-occupation"></td><td headers="ledger-r4 ledger-type">Donation</td><td headers="ledger-r4 ledger-date">10/01/2024</td><td headers="ledger-r4 ledger-income">$100.00</td><td headers="ledger-r4 ledger-expense"></td><td headers="ledger-r4 ledger-payment">Website</td></tr>
+        <tr><th id="ledger-r5" scope="row">AZ Political Donations</th><td headers="ledger-r5 ledger-address">Campaign Review Ads</td><td headers="ledger-r5 ledger-occupation"></td><td headers="ledger-r5 ledger-type">Expense</td><td headers="ledger-r5 ledger-date">10/02/2024</td><td headers="ledger-r5 ledger-income"></td><td headers="ledger-r5 ledger-expense">$1,227.50</td><td headers="ledger-r5 ledger-payment">Credit card</td></tr>
+        <tr><th id="ledger-r6" scope="row">RL Marsh</th><td headers="ledger-r6 ledger-address"></td><td headers="ledger-r6 ledger-occupation"></td><td headers="ledger-r6 ledger-type">Donation</td><td headers="ledger-r6 ledger-date">10/02/2024</td><td headers="ledger-r6 ledger-income">$100.00</td><td headers="ledger-r6 ledger-expense"></td><td headers="ledger-r6 ledger-payment">Check 44385</td></tr>
+        <tr><th id="ledger-r7" scope="row">Miller Promotions</th><td headers="ledger-r7 ledger-address">Campaign Mailers</td><td headers="ledger-r7 ledger-occupation"></td><td headers="ledger-r7 ledger-type">Expense</td><td headers="ledger-r7 ledger-date">10/03/2024</td><td headers="ledger-r7 ledger-income"></td><td headers="ledger-r7 ledger-expense">$5,306.93</td><td headers="ledger-r7 ledger-payment">Credit card</td></tr>
+        <tr><th id="ledger-r8" scope="row">Small Donation</th><td headers="ledger-r8 ledger-address"></td><td headers="ledger-r8 ledger-occupation"></td><td headers="ledger-r8 ledger-type">Donation</td><td headers="ledger-r8 ledger-date">10/05/2024</td><td headers="ledger-r8 ledger-income">$50.00</td><td headers="ledger-r8 ledger-expense"></td><td headers="ledger-r8 ledger-payment">Cash</td></tr>
+        <tr><th id="ledger-r9" scope="row">Michael Ingraham</th><td headers="ledger-r9 ledger-address">6094 E Conolla Dr, Paradise Valley</td><td headers="ledger-r9 ledger-occupation"></td><td headers="ledger-r9 ledger-type">Donation</td><td headers="ledger-r9 ledger-date">10/08/2024</td><td headers="ledger-r9 ledger-income">$1,000.00</td><td headers="ledger-r9 ledger-expense"></td><td headers="ledger-r9 ledger-payment">Website</td></tr>
+        <tr><th id="ledger-r10" scope="row">Paul Babcock</th><td headers="ledger-r10 ledger-address">1115 Rooster St, Akewau</td><td headers="ledger-r10 ledger-occupation"></td><td headers="ledger-r10 ledger-type">Donation</td><td headers="ledger-r10 ledger-date">10/18/2024</td><td headers="ledger-r10 ledger-income">$200.00</td><td headers="ledger-r10 ledger-expense"></td><td headers="ledger-r10 ledger-payment">Website</td></tr>
+        <tr><th id="ledger-r11" scope="row">Campaign Services</th><td headers="ledger-r11 ledger-address">Advertisement placement</td><td headers="ledger-r11 ledger-occupation"></td><td headers="ledger-r11 ledger-type">Expense</td><td headers="ledger-r11 ledger-date">10/19/2024</td><td headers="ledger-r11 ledger-income"></td><td headers="ledger-r11 ledger-expense">$473.81</td><td headers="ledger-r11 ledger-payment">Credit card</td></tr>
+        <tr><th id="ledger-r12" scope="row">Nicholas Bihl</th><td headers="ledger-r12 ledger-address">Campaign MMS advertisement</td><td headers="ledger-r12 ledger-occupation"></td><td headers="ledger-r12 ledger-type">Expense</td><td headers="ledger-r12 ledger-date">10/19/2024</td><td headers="ledger-r12 ledger-income"></td><td headers="ledger-r12 ledger-expense">$6,000.00</td><td headers="ledger-r12 ledger-payment">Credit card</td></tr>
+        <tr><th id="ledger-r13" scope="row">Community Supporter</th><td headers="ledger-r13 ledger-address"></td><td headers="ledger-r13 ledger-occupation"></td><td headers="ledger-r13 ledger-type">Donation</td><td headers="ledger-r13 ledger-date">10/19/2024</td><td headers="ledger-r13 ledger-income">$50.00</td><td headers="ledger-r13 ledger-expense"></td><td headers="ledger-r13 ledger-payment">Website</td></tr>
+        <tr><th id="ledger-r14" scope="row">Small Donation</th><td headers="ledger-r14 ledger-address"></td><td headers="ledger-r14 ledger-occupation"></td><td headers="ledger-r14 ledger-type">Donation</td><td headers="ledger-r14 ledger-date">10/19/2024</td><td headers="ledger-r14 ledger-income">$50.00</td><td headers="ledger-r14 ledger-expense"></td><td headers="ledger-r14 ledger-payment">Cash</td></tr>
+        <tr><th id="ledger-r15" scope="row">Local Resident</th><td headers="ledger-r15 ledger-address"></td><td headers="ledger-r15 ledger-occupation"></td><td headers="ledger-r15 ledger-type">Donation</td><td headers="ledger-r15 ledger-date">10/19/2024</td><td headers="ledger-r15 ledger-income">$50.00</td><td headers="ledger-r15 ledger-expense"></td><td headers="ledger-r15 ledger-payment">Website</td></tr>
+        <tr><th id="ledger-r16" scope="row">Small Donation</th><td headers="ledger-r16 ledger-address"></td><td headers="ledger-r16 ledger-occupation"></td><td headers="ledger-r16 ledger-type">Donation</td><td headers="ledger-r16 ledger-date">10/19/2024</td><td headers="ledger-r16 ledger-income">$50.00</td><td headers="ledger-r16 ledger-expense"></td><td headers="ledger-r16 ledger-payment">Website</td></tr>
+        <tr><th id="ledger-r17" scope="row">Neighborhood Donor</th><td headers="ledger-r17 ledger-address"></td><td headers="ledger-r17 ledger-occupation"></td><td headers="ledger-r17 ledger-type">Donation</td><td headers="ledger-r17 ledger-date">10/19/2024</td><td headers="ledger-r17 ledger-income">$50.00</td><td headers="ledger-r17 ledger-expense"></td><td headers="ledger-r17 ledger-payment">Website</td></tr>
+        <tr><th id="ledger-r18" scope="row">Small Donation</th><td headers="ledger-r18 ledger-address"></td><td headers="ledger-r18 ledger-occupation"></td><td headers="ledger-r18 ledger-type">Donation</td><td headers="ledger-r18 ledger-date">10/19/2024</td><td headers="ledger-r18 ledger-income">$50.00</td><td headers="ledger-r18 ledger-expense"></td><td headers="ledger-r18 ledger-payment">Website</td></tr>
+        <tr><th id="ledger-r19" scope="row">Civic Volunteer</th><td headers="ledger-r19 ledger-address"></td><td headers="ledger-r19 ledger-occupation"></td><td headers="ledger-r19 ledger-type">Donation</td><td headers="ledger-r19 ledger-date">10/19/2024</td><td headers="ledger-r19 ledger-income">$50.00</td><td headers="ledger-r19 ledger-expense"></td><td headers="ledger-r19 ledger-payment">Website</td></tr>
+        <tr><th id="ledger-r20" scope="row">Small Donation</th><td headers="ledger-r20 ledger-address"></td><td headers="ledger-r20 ledger-occupation"></td><td headers="ledger-r20 ledger-type">Donation</td><td headers="ledger-r20 ledger-date">10/19/2024</td><td headers="ledger-r20 ledger-income">$50.00</td><td headers="ledger-r20 ledger-expense"></td><td headers="ledger-r20 ledger-payment">Website</td></tr>
+        <tr><th id="ledger-r21" scope="row">Website Services</th><td headers="ledger-r21 ledger-address">Campaign website maintenance</td><td headers="ledger-r21 ledger-occupation"></td><td headers="ledger-r21 ledger-type">Expense</td><td headers="ledger-r21 ledger-date">10/21/2024</td><td headers="ledger-r21 ledger-income"></td><td headers="ledger-r21 ledger-expense">$1.75</td><td headers="ledger-r21 ledger-payment">Credit card</td></tr>
+        <tr><th id="ledger-r22" scope="row">Website Services</th><td headers="ledger-r22 ledger-address">Campaign website maintenance</td><td headers="ledger-r22 ledger-occupation"></td><td headers="ledger-r22 ledger-type">Expense</td><td headers="ledger-r22 ledger-date">10/21/2024</td><td headers="ledger-r22 ledger-income"></td><td headers="ledger-r22 ledger-expense">$1.75</td><td headers="ledger-r22 ledger-payment">Credit card</td></tr>
+      </tbody>
+    </table>
+    <div class="page-number">Page 1 of 1</div>
+  </main>
+</body>
+</html>

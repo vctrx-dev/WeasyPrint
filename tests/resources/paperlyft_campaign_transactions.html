@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en-US">
+<head>
+  <meta charset="utf-8">
+  <title>Campaign transactions table regression fixture</title>
+  <style>
+    @page {
+      size: Letter landscape;
+      margin: 0.45in;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      color: #000;
+      font-family: "DejaVu Sans", sans-serif;
+      font-size: 8.25pt;
+      line-height: 1.2;
+    }
+
+    body {
+      margin: 0;
+    }
+
+    .document-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 14pt;
+    }
+
+    .agency {
+      margin: 0;
+      font-size: 8pt;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+
+    h1 {
+      margin: 1pt 0 0;
+      font-size: 12pt;
+      line-height: 1.05;
+      text-transform: uppercase;
+    }
+
+    .identifier {
+      min-width: 122pt;
+      border: 0.75pt solid #000;
+      padding: 5pt 7pt 6pt;
+    }
+
+    .identifier span {
+      display: block;
+      margin-bottom: 4pt;
+      font-size: 6.5pt;
+      text-transform: uppercase;
+    }
+
+    .identifier strong {
+      font-size: 11pt;
+      font-weight: 400;
+    }
+
+    .context {
+      display: flex;
+      justify-content: space-between;
+      margin: 0 0 5pt;
+      font-size: 7.25pt;
+      text-transform: uppercase;
+    }
+
+    table {
+      width: 100%;
+      border: 1pt solid #000;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    caption {
+      margin-bottom: 4pt;
+      font-size: 8pt;
+      font-weight: 400;
+      text-align: left;
+      text-transform: uppercase;
+    }
+
+    col.recipient { width: 24%; }
+    col.date { width: 11%; }
+    col.category { width: 16%; }
+    col.purpose { width: 20%; }
+    col.amount { width: 10%; }
+    col.payment { width: 9%; }
+
+    th,
+    td {
+      border: 0.55pt solid #000;
+      padding: 4pt 4.5pt;
+      vertical-align: top;
+    }
+
+    thead th {
+      font-size: 7.25pt;
+      font-weight: 600;
+      text-align: center;
+      vertical-align: middle;
+    }
+
+    tbody th[scope="rowgroup"] {
+      font-weight: 600;
+      text-align: left;
+    }
+
+    tbody + tbody tr:first-child > * {
+      border-top-width: 0.9pt;
+    }
+
+    tfoot th,
+    tfoot td {
+      border-top-width: 1pt;
+      font-weight: 700;
+    }
+
+    .address {
+      display: block;
+      margin-top: 3pt;
+      font-size: 7.25pt;
+      font-weight: 400;
+    }
+
+    .amount-cell {
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .payment-cell {
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="document-header">
+      <div>
+        <p class="agency">STATE OF ARIZONA</p>
+        <h1>Committee Campaign<br>Finance Report</h1>
+      </div>
+      <div class="identifier">
+        <span>Committee ID Number</span>
+        <strong>PAC2023-001</strong>
+      </div>
+    </header>
+
+    <p class="context">
+      <span>Reporting period ending March 31, 2026</span>
+      <span>Schedule B(1)</span>
+    </p>
+
+    <table>
+      <caption>Disbursements for operating expenses</caption>
+      <colgroup>
+        <col class="recipient">
+      </colgroup>
+      <colgroup>
+        <col class="date">
+        <col class="category">
+        <col class="purpose">
+      </colgroup>
+      <colgroup>
+        <col class="amount">
+        <col class="amount">
+      </colgroup>
+      <colgroup>
+        <col class="payment">
+      </colgroup>
+      <thead>
+        <tr>
+          <th id="h-recipient" scope="col" rowspan="2">Recipient</th>
+          <th id="h-details" scope="colgroup" colspan="3">Transaction details</th>
+          <th id="h-amounts" scope="colgroup" colspan="2">Amounts</th>
+          <th id="h-payment" scope="col" rowspan="2">Payment type</th>
+        </tr>
+        <tr>
+          <th id="h-date" scope="col">Date</th>
+          <th id="h-category" scope="col">Category</th>
+          <th id="h-purpose" scope="col">Purpose</th>
+          <th id="h-period" scope="col">This reporting period</th>
+          <th id="h-cycle" scope="col">Election cycle</th>
+        </tr>
+      </thead>
+
+      <tbody>
+        <tr>
+          <th id="r-primary-consultants" scope="rowgroup" rowspan="2">
+            Primary Consultants
+            <span class="address">5320 N 16th Street, Suite 111<br>Phoenix, AZ 85016</span>
+          </th>
+          <td headers="r-primary-consultants h-details h-date">03/15/2026</td>
+          <td headers="r-primary-consultants h-details h-category">Website services</td>
+          <td headers="r-primary-consultants h-details h-purpose">Accessible campaign website remediation</td>
+          <td class="amount-cell" headers="r-primary-consultants h-amounts h-period">$50.00</td>
+          <td class="amount-cell" headers="r-primary-consultants h-amounts h-cycle">$50.00</td>
+          <td class="payment-cell" headers="r-primary-consultants h-payment">Credit</td>
+        </tr>
+        <tr>
+          <td headers="r-primary-consultants h-details h-date">03/22/2026</td>
+          <td headers="r-primary-consultants h-details h-category">Consulting</td>
+          <td headers="r-primary-consultants h-details h-purpose">Quarterly compliance review</td>
+          <td class="amount-cell" headers="r-primary-consultants h-amounts h-period">$125.00</td>
+          <td class="amount-cell" headers="r-primary-consultants h-amounts h-cycle">$175.00</td>
+          <td class="payment-cell" headers="r-primary-consultants h-payment">Check</td>
+        </tr>
+      </tbody>
+
+      <tbody>
+        <tr>
+          <th id="r-desert-print" scope="rowgroup" rowspan="2">
+            Desert Print &amp; Mail
+            <span class="address">13350 S Sunland Gin Road<br>Arizona City, AZ 85123</span>
+          </th>
+          <td headers="r-desert-print h-details h-date">03/18/2026</td>
+          <td headers="r-desert-print h-details h-category">Printing</td>
+          <td headers="r-desert-print h-details h-purpose">Large-print voter information cards</td>
+          <td class="amount-cell" headers="r-desert-print h-amounts h-period">$320.00</td>
+          <td class="amount-cell" headers="r-desert-print h-amounts h-cycle">$320.00</td>
+          <td class="payment-cell" headers="r-desert-print h-payment">Credit</td>
+        </tr>
+        <tr>
+          <td headers="r-desert-print h-details h-date">03/25/2026</td>
+          <td headers="r-desert-print h-details h-category">Postage</td>
+          <td headers="r-desert-print h-details h-purpose">Mailing campaign finance notices</td>
+          <td class="amount-cell" headers="r-desert-print h-amounts h-period">$84.25</td>
+          <td class="amount-cell" headers="r-desert-print h-amounts h-cycle">$404.25</td>
+          <td class="payment-cell" headers="r-desert-print h-payment">Check</td>
+        </tr>
+      </tbody>
+
+      <tfoot>
+        <tr>
+          <th id="r-total" scope="row" colspan="4">Schedule total</th>
+          <td class="amount-cell" headers="r-total h-amounts h-period">$579.25</td>
+          <td class="amount-cell" headers="r-total h-amounts h-cycle">$579.25</td>
+          <td headers="r-total h-payment">Not applicable</td>
+        </tr>
+      </tfoot>
+    </table>
+  </main>
+</body>
+</html>

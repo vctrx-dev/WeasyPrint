@@ -18,6 +18,7 @@ WeasyPrint
    :caption: Extra Information
    :maxdepth: 2
 
+   paperlyft_table_tagging
    changelog
    contribute
    support

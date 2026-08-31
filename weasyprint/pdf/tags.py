@@ -5,6 +5,7 @@ from collections import defaultdict
 import pydyf
 
 from ..formatting_structure import boxes
+from ..html import SPACE_SEPARATED_TOKENS_RE
 from ..layout.absolute import AbsolutePlaceholder
 from ..logger import LOGGER
 
@@ -43,6 +44,7 @@ def add_tags(pdf, document, pdf_version, page_streams):
     # Map content.
     content_mapping['Nums'] = pydyf.Array()
     annotations = []
+    table_header_ids = defaultdict(dict)
     for page_number, (page, stream) in enumerate(zip(document.pages, page_streams)):
         tags = stream._tags
         page_box = page._page_box
@@ -55,7 +57,7 @@ def add_tags(pdf, document, pdf_version, page_streams):
         # Map page box content.
         elements = _build_box_tree(
             page_box, structure_document, pdf, page_number, page_nums, annotations,
-            tags)
+            tags, table_header_ids)
         for element in elements:
             structure_document['K'].append(element.reference)
         assert not tags
@@ -123,7 +125,9 @@ def _get_pdf_tag(tag):
         return 'NonStruct'
 
 
-def _build_box_tree(box, parent, pdf, page_number, nums, annotations, tags):
+def _build_box_tree(
+        box, parent, pdf, page_number, nums, annotations, tags,
+        table_header_ids):
     """Recursively build tag tree for given box and yield children."""
 
     # Special case for absolute elements.
@@ -139,7 +143,8 @@ def _build_box_tree(box, parent, pdf, page_number, nums, annotations, tags):
         if isinstance(box, boxes.ParentBox) and not isinstance(box, boxes.LineBox):
             for child in box.children:
                 yield from _build_box_tree(
-                    child, parent, pdf, page_number, nums, annotations, tags)
+                    child, parent, pdf, page_number, nums, annotations, tags,
+                    table_header_ids)
             return
     elif isinstance(box, boxes.MarginBox):
         # Build tree for margin boxes but don’t link it to main tree. It ensures that
@@ -147,7 +152,8 @@ def _build_box_tree(box, parent, pdf, page_number, nums, annotations, tags):
         # included in tree as Artifact, but that’s only allowed in PDF 2.0.
         for child in box.children:
             tuple(_build_box_tree(
-                child, parent, pdf, page_number, nums, annotations, tags))
+                child, parent, pdf, page_number, nums, annotations, tags,
+                table_header_ids))
         return
     elif tag in ('TD', 'TH'):
         # Ignore anonymous blocks created for table cells.
@@ -179,7 +185,8 @@ def _build_box_tree(box, parent, pdf, page_number, nums, annotations, tags):
             })
             pdf.add_object(parent)
             children = _build_box_tree(
-                box, parent, pdf, page_number, nums, annotations, tags)
+                box, parent, pdf, page_number, nums, annotations, tags,
+                table_header_ids)
             for child in children:
                 parent['K'].append(child.reference)
             yield parent
@@ -227,10 +234,20 @@ def _build_box_tree(box, parent, pdf, page_number, nums, annotations, tags):
                     box.children.extend(child.children if child is table else [child])
     elif tag in ('TH', 'TD'):
         element['A'] = pydyf.Dictionary({'O': '/Table'})
+        # PDF/UA derives effective table geometry from structure attributes,
+        # not painted borders. Keep layout spans on the semantic cell.
         if box.colspan != 1:
             element['A']['ColSpan'] = box.colspan
         if box.rowspan != 1:
             element['A']['RowSpan'] = box.rowspan
+        if tag == 'TH':
+            # PDF/UA-1 has direct row and column scopes only. Grouped HTML
+            # scopes are expanded into concrete Headers associations below.
+            scope = box.element.attrib.get('scope', '').lower()
+            if scope == 'row':
+                element['A']['Scope'] = '/Row'
+            elif scope == 'col':
+                element['A']['Scope'] = '/Column'
         # Store table cell element to map headers to cells later.
         # TODO: don’t use the box to store this.
         box.mark = element
@@ -303,7 +320,8 @@ def _build_box_tree(box, parent, pdf, page_number, nums, annotations, tags):
                 # lists.
                 child_index = len(child_parent['K'])
                 child_elements = _build_box_tree(
-                    child, child_parent, pdf, page_number, nums, annotations, tags)
+                    child, child_parent, pdf, page_number, nums, annotations, tags,
+                    table_header_ids)
                 child_parent['K'][child_index:child_index] = [
                     element.reference for element in child_elements]
 
@@ -316,52 +334,73 @@ def _build_box_tree(box, parent, pdf, page_number, nums, annotations, tags):
 
     # Link table cells to related headers.
     if tag == 'Table':
-        def _get_rows(table_box):
+        def _get_rows(table_box, row_group=None):
             for child in table_box.children:
-                yield from [child] if child.element_tag == 'tr' else _get_rows(child)
+                if child.element_tag == 'tr':
+                    yield child, row_group
+                else:
+                    child_row_group = (
+                        child if isinstance(child, boxes.TableRowGroupBox)
+                        else row_group)
+                    yield from _get_rows(child, child_row_group)
 
         # Get headers and rows.
         column_headers = defaultdict(list)
         row_headers = defaultdict(list)
+        row_group_headers = defaultdict(list)
+        persisted_header_ids = table_header_ids[id(box.element)]
+        current_header_ids = {}
         rows = tuple(_get_rows(box))
 
         # Find column and row headers.
-        colspans = defaultdict(int)
-        for i, row in enumerate(rows):
-            j = 0
+        for i, (row, row_group) in enumerate(rows):
             for cell in row.children:
+                j = cell.grid_x
                 if cell.element is not None and cell.element_tag == 'th':
                     key = pydyf.String(f'{element.number}-{i}-{j}')
                     cell.mark['ID'] = key
-                    if cell.element.attrib.get('scope') == 'row':
+                    if source_id := cell.element.attrib.get('id'):
+                        current_header_ids.setdefault(source_id, key)
+                        persisted_header_ids.setdefault(source_id, key)
+                    scope = cell.element.attrib.get('scope', '').lower()
+                    if scope == 'row':
                         row_headers[i].append(key)
+                    elif scope == 'rowgroup':
+                        row_group_headers[id(row_group)].append(key)
                     else:
-                        column_headers[j].append(key)
-                for _ in range(cell.colspan):
-                    colspans[j] = cell.rowspan - 1
-                    j += 1
-                if colspans[j]:
-                    j += 1
-                    colspans[j] -= 1
+                        for column in range(j, j + cell.colspan):
+                            column_headers[column].append(key)
 
         # Map headers to cells.
-        colspans = defaultdict(int)
-        for i, row in enumerate(rows):
-            j = 0
+        for i, (row, row_group) in enumerate(rows):
             for cell in row.children:
-                if cell.element is not None and cell.element_tag == 'td':
+                j = cell.grid_x
+                headers_attribute = (
+                    cell.element.attrib.get('headers')
+                    if cell.element is not None and
+                    cell.element_tag in ('th', 'td') else None)
+                if headers_attribute is not None:
+                    headers = []
+                    seen_header_ids = set()
+                    for source_id in SPACE_SEPARATED_TOKENS_RE.findall(
+                            headers_attribute):
+                        if source_id not in seen_header_ids:
+                            seen_header_ids.add(source_id)
+                            header_id = current_header_ids.get(source_id)
+                            if header_id is None:
+                                header_id = persisted_header_ids.get(source_id)
+                            if header_id is not None:
+                                headers.append(header_id)
+                    cell.mark['A']['Headers'] = pydyf.Array(headers)
+                elif cell.element is not None and cell.element_tag == 'td':
                     headers = [
                         header for span in range(cell.rowspan)
                         for header in row_headers[i+span]]
+                    headers += row_group_headers[id(row_group)]
                     headers += [
                         header for span in range(cell.colspan)
                         for header in column_headers[j+span]]
+                    headers = list(dict.fromkeys(headers))
                     cell.mark['A']['Headers'] = pydyf.Array(headers)
-                for _ in range(cell.colspan):
-                    colspans[j] = cell.rowspan - 1
-                    j += 1
-                if colspans[j]:
-                    j += 1
-                    colspans[j] -= 1
 
     yield element

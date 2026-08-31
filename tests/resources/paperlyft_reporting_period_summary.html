@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en-US">
+<head>
+  <meta charset="utf-8">
+  <title>Campaign reporting period and financial summary fixture</title>
+  <style>
+    @page { size: Letter portrait; margin: 0.38in 0.42in; }
+    * { box-sizing: border-box; }
+    html { color: #000; font-family: "DejaVu Sans", sans-serif; font-size: 7.2pt; line-height: 1.15; }
+    body { margin: 0; }
+    .masthead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7pt; }
+    .agency { font-size: 7pt; font-weight: 700; }
+    h1 { margin: 1pt 0 0; font-size: 10pt; line-height: 1.05; text-transform: uppercase; }
+    .id-box { width: 110pt; border: 0.7pt solid #000; padding: 4pt 6pt; }
+    .id-box span { display: block; margin-bottom: 3pt; font-size: 5.8pt; text-transform: uppercase; }
+    .id-box strong { font-size: 9pt; font-weight: 400; }
+    .field-row { display: flex; gap: 9pt; margin: 4pt 0; }
+    .field { flex: 1; border-bottom: 0.55pt solid #000; padding: 0 2pt 2pt; }
+    .field b { margin-right: 4pt; font-size: 5.8pt; text-transform: uppercase; }
+    .instructions { margin: 5pt 0 6pt; font-size: 6.2pt; }
+    table { width: 100%; border: 0.9pt solid #000; border-collapse: collapse; table-layout: fixed; }
+    caption { margin: 7pt 0 3pt; font-size: 7pt; font-weight: 700; text-align: left; text-transform: uppercase; }
+    th, td { border: 0.45pt solid #000; padding: 2.6pt 3pt; vertical-align: middle; }
+    thead th { font-size: 6.2pt; text-align: center; text-transform: uppercase; }
+    tbody th { font-weight: 400; text-align: left; }
+    .select { width: 6%; text-align: center; }
+    .period { width: 56%; }
+    .due { width: 38%; }
+    .box { display: inline-block; width: 7pt; height: 7pt; border: 0.6pt solid #000; vertical-align: -1pt; }
+    .box.checked::after { content: "X"; display: block; font-size: 6pt; font-weight: 700; line-height: 6pt; text-align: center; }
+    .summary .activity { width: 66%; }
+    .summary .period-amount { width: 17%; }
+    .summary .cycle-amount { width: 17%; }
+    .summary td:not(:first-child) { text-align: right; }
+    .note { margin: 5pt 0 0; font-size: 5.8pt; text-align: center; }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="masthead">
+      <div>
+        <div class="agency">STATE OF ARIZONA</div>
+        <h1>Committee Campaign<br>Finance Report</h1>
+      </div>
+      <div class="id-box"><span>Committee ID Number</span><strong>C20200219</strong></div>
+    </header>
+
+    <div class="field-row">
+      <div class="field"><b>Committee name</b> Goodman for County Supervisor</div>
+    </div>
+    <div class="field-row">
+      <div class="field"><b>Office sought</b> County Office</div>
+      <div class="field"><b>Office</b> District 2 Supervisor</div>
+    </div>
+    <p class="instructions">Select one reporting period. Reporting periods and due dates are shown exactly as filing staff use them.</p>
+
+    <table>
+      <caption>Reporting period</caption>
+      <colgroup><col class="select"><col class="period"><col class="due"></colgroup>
+      <thead>
+        <tr>
+          <th id="rp-select" scope="col">Select</th>
+          <th id="rp-period" scope="col">Reporting period</th>
+          <th id="rp-due" scope="col">Report due</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td headers="rp-select"><span class="box"></span></td><th id="rp-1" scope="row">2019 Fourth Quarter: October 1 to December 31, 2019</th><td headers="rp-1 rp-due">January 1 to January 15, 2020</td></tr>
+        <tr><td headers="rp-select"><span class="box"></span></td><th id="rp-2" scope="row">2020 March Pre-Election: January 1 to February 22, 2020</th><td headers="rp-2 rp-due">February 23 to March 2, 2020</td></tr>
+        <tr><td headers="rp-select"><span class="box"></span></td><th id="rp-3" scope="row">2020 First Quarter: February 23 to March 31, 2020</th><td headers="rp-3 rp-due">April 1 to April 15, 2020</td></tr>
+        <tr><td headers="rp-select"><span class="box"></span></td><th id="rp-4" scope="row">2020 First Quarter: January 1 to March 31, 2020</th><td headers="rp-4 rp-due">April 1 to April 15, 2020</td></tr>
+        <tr><td headers="rp-select"><span class="box"></span></td><th id="rp-5" scope="row">2020 May Pre-Election: April 1 to May 2, 2020</th><td headers="rp-5 rp-due">May 3 to May 11, 2020</td></tr>
+        <tr><td headers="rp-select"><span class="box checked"></span></td><th id="rp-6" scope="row">2020 Second Quarter: April 1 to June 30, 2020</th><td headers="rp-6 rp-due">July 1 to July 15, 2020</td></tr>
+        <tr><td headers="rp-select"><span class="box"></span></td><th id="rp-7" scope="row">2020 July Pre-Election: July 1 to July 18, 2020</th><td headers="rp-7 rp-due">July 19 to July 27, 2020</td></tr>
+        <tr><td headers="rp-select"><span class="box"></span></td><th id="rp-8" scope="row">2020 Third Quarter: July 19 to September 30, 2020</th><td headers="rp-8 rp-due">October 1 to October 15, 2020</td></tr>
+        <tr><td headers="rp-select"><span class="box"></span></td><th id="rp-9" scope="row">2020 October Pre-Election: October 1 to October 17, 2020</th><td headers="rp-9 rp-due">October 18 to October 26, 2020</td></tr>
+        <tr><td headers="rp-select"><span class="box"></span></td><th id="rp-10" scope="row">2020 Fourth Quarter: October 18 to December 31, 2020</th><td headers="rp-10 rp-due">January 1 to January 15, 2021</td></tr>
+        <tr><td headers="rp-select"><span class="box"></span></td><th id="rp-11" scope="row">2021 March Pre-Election: January 1 to February 20, 2021</th><td headers="rp-11 rp-due">February 21 to March 1, 2021</td></tr>
+        <tr><td headers="rp-select"><span class="box"></span></td><th id="rp-12" scope="row">2021 First Quarter: February 21 to March 31, 2021</th><td headers="rp-12 rp-due">April 1 to April 15, 2021</td></tr>
+        <tr><td headers="rp-select"><span class="box"></span></td><th id="rp-13" scope="row">2021 Second Quarter: April 1 to June 30, 2021</th><td headers="rp-13 rp-due">July 1 to July 15, 2021</td></tr>
+        <tr><td headers="rp-select"><span class="box"></span></td><th id="rp-14" scope="row">2021 Third Quarter: July 1 to September 30, 2021</th><td headers="rp-14 rp-due">October 1 to October 15, 2021</td></tr>
+        <tr><td headers="rp-select"><span class="box"></span></td><th id="rp-15" scope="row">Final Campaign Finance Report prior to committee termination</th><td headers="rp-15 rp-due">End of previous period through today's date</td></tr>
+      </tbody>
+    </table>
+
+    <table class="summary">
+      <caption>Financial summary</caption>
+      <colgroup><col class="activity"><col class="period-amount"><col class="cycle-amount"></colgroup>
+      <thead><tr><th id="fs-activity" scope="col">Activity</th><th id="fs-period" scope="col">Cash activity this reporting period</th><th id="fs-cycle" scope="col">Election cycle to date</th></tr></thead>
+      <tbody>
+        <tr><th id="fs-a" scope="row">(a) Committee value at the beginning of this reporting period</th><td headers="fs-a fs-period">$1,825.00</td><td headers="fs-a fs-cycle"></td></tr>
+        <tr><th id="fs-b" scope="row">(b) Total receipts from Summary of Receipts</th><td headers="fs-b fs-period">$49.45</td><td headers="fs-b fs-cycle"></td></tr>
+        <tr><th id="fs-c" scope="row">(c) Total disbursements from Summary of Disbursements</th><td headers="fs-c fs-period">$2,032.29</td><td headers="fs-c fs-cycle"></td></tr>
+        <tr><th id="fs-d" scope="row">(d) Balance at close of reporting period</th><td headers="fs-d fs-period">$232.29</td><td headers="fs-d fs-cycle"></td></tr>
+      </tbody>
+    </table>
+    <p class="note">Arizona Secretary of State - committee campaign finance reporting form</p>
+  </main>
+</body>
+</html>
