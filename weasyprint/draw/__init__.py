@@ -681,7 +681,8 @@ def draw_inline_level(stream, page, box, offset_x=0, text_overflow='clip',
                         stream, page, child, child_offset_x, text_overflow, ellipsis)
         elif isinstance(box, boxes.InlineReplacedBox):
             marker = (
-                stream.artifact() if box.is_repeated_table_header
+                stream.artifact() if (
+                    box.is_repeated_table_header or box.is_decorative_image)
                 else stream.marked(box, 'Figure'))
             with marker:
                 draw_replacedbox(stream, box)
@@ -695,7 +696,8 @@ def draw_block_level(page, stream, blocks_and_cells):
     for block, blocks_and_cells in blocks_and_cells.items():
         if isinstance(block, boxes.ReplacedBox):
             marker = (
-                stream.artifact() if block.is_repeated_table_header
+                stream.artifact() if (
+                    block.is_repeated_table_header or block.is_decorative_image)
                 else stream.marked(block, 'Figure'))
             with marker:
                 draw_replacedbox(stream, block)

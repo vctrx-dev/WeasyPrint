@@ -77,6 +77,7 @@ class Box:
     is_outside_marker = False
     is_repeated_table_header = False
     is_table_header_fixed_content = False
+    is_decorative_image = False
     has_rendered_table_header = False
 
     # Other properties

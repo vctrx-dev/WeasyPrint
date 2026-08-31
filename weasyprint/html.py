@@ -35,6 +35,25 @@ SPACE_SEPARATED_TOKENS_RE = re.compile(f'[^{WHITESPACE}]+')
 INTEGER_RE = re.compile(f'^[{WHITESPACE}]*([+-]?)([0-9]+)')
 DIMENSION_RE = re.compile(f'^[{WHITESPACE}]*([0-9]+([.][0-9]*)?)(%)?')
 
+# Non-abstract WAI-ARIA roles. The first recognized role token determines the
+# semantic role of an element, so unsupported and abstract tokens are skipped.
+ARIA_NON_ABSTRACT_ROLES = frozenset((
+    'alert', 'alertdialog', 'application', 'article', 'banner', 'blockquote',
+    'button', 'caption', 'cell', 'checkbox', 'code', 'columnheader',
+    'combobox', 'comment', 'complementary', 'contentinfo', 'definition',
+    'deletion', 'dialog', 'directory', 'document', 'emphasis', 'feed',
+    'figure', 'form', 'generic', 'grid', 'gridcell', 'group', 'heading',
+    'image', 'img', 'insertion', 'link', 'list', 'listbox', 'listitem', 'log',
+    'main', 'mark', 'marquee', 'math', 'menu', 'menubar', 'menuitem',
+    'menuitemcheckbox', 'menuitemradio', 'meter', 'navigation', 'none', 'note',
+    'option', 'paragraph', 'presentation', 'progressbar', 'radio',
+    'radiogroup', 'region', 'row', 'rowgroup', 'rowheader', 'scrollbar',
+    'search', 'searchbox', 'sectionfooter', 'sectionheader', 'separator',
+    'slider', 'spinbutton', 'status', 'strong', 'subscript', 'suggestion',
+    'superscript',
+    'switch', 'tab', 'table', 'tablist', 'tabpanel', 'term', 'textbox', 'time',
+    'timer', 'toolbar', 'tooltip', 'tree', 'treegrid', 'treeitem'))
+
 
 def parse_url(string, base_url, allow_relative=False):
     """Parse a valid URL potentially surrounded by spaces.
@@ -173,6 +192,13 @@ def element_has_link_type(element, link_type):
     return any(ascii_lower(token) == link_type for token in tokens)
 
 
+def get_aria_role(element):
+    """Return the first recognized non-abstract ARIA role, if any."""
+    for token in SPACE_SEPARATED_TOKENS_RE.findall(element.get('role', '')):
+        if (role := ascii_lower(token)) in ARIA_NON_ABSTRACT_ROLES:
+            return role
+
+
 # Maps HTML tag names to function taking an HTML element and returning a Box.
 HTML_HANDLERS = {}
 
@@ -207,6 +233,13 @@ def make_replaced_box(element, box, image):
         boxes.BlockReplacedBox if 'block' in box.style['display']
         else boxes.InlineReplacedBox)
     new_box = type_(element.tag, box.style, element, image)
+    if element.tag == 'img':
+        role = get_aria_role(element)
+        hidden = ascii_lower(element.get('aria-hidden', '').strip()) == 'true'
+        new_box.is_decorative_image = (
+            element.get('alt') == '' or (
+                'tabindex' not in element.attrib and (
+                    role in ('none', 'presentation') or hidden)))
     # TODO: check other attributes that need to be copied
     # TODO: find another solution
     new_box.string_set = box.string_set

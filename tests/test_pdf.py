@@ -830,6 +830,176 @@ def test_pdf_tags_nested_lists_order():
         assert sorted(numbers) == numbers
 
 
+def _tagged_image_pdf(content):
+    """Render one image-tagging fixture with a visible raster image."""
+    image_url = path2url(resource_path('pattern.png'))
+    return FakeHTML(string=f'''
+      <html lang="en"><body>
+        {content.format(image_url=image_url)}
+      </body></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+
+
+def _assert_caption_owned_by_figure(pdf):
+    objects = {
+        reference: body
+        for reference, body in re.findall(
+            rb'(\d+) 0 obj\n(.*?)\nendobj', pdf, re.S)}
+    figure = next(
+        body for body in objects.values()
+        if re.search(rb'/S /Figure(?:/|>>)', body))
+    caption_reference = next(
+        reference for reference, body in objects.items()
+        if re.search(rb'/S /Caption(?:/|>>)', body))
+    assert re.search(rb'\b' + caption_reference + rb' 0 R\b', figure)
+
+
+@assert_no_logs
+def test_pdf_tags_meaningful_image_has_alt_and_parent_tree():
+    pdf = _tagged_image_pdf('''
+      <img src="{image_url}" alt="Arizona state seal">
+    ''')
+
+    assert len(re.findall(rb'/S /Figure(?:/|>>)', pdf)) == 1
+    assert pdf.count(b'/Alt (Arizona state seal)') == 1
+    assert b'/MCID' in pdf
+    assert b'/ParentTree ' in pdf
+
+
+@assert_no_logs
+def test_pdf_tags_one_pixel_state_carrier_is_meaningful():
+    transparent_pixel = (
+        'data:image/gif;base64,'
+        'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7')
+    pdf = FakeHTML(string=f'''
+      <html lang="en"><body>
+        <p>Before <img src="{transparent_pixel}" alt="Checked checkbox:"
+        width="1" height="1"> after</p>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+
+    assert len(re.findall(rb'/S /Figure(?:/|>>)', pdf)) == 1
+    assert pdf.count(b'/Alt (Checked checkbox:)') == 1
+    assert b'/MCID' in pdf
+
+
+@assert_no_logs
+def test_pdf_tags_decorative_image_is_an_artifact_but_is_painted():
+    pdf = _tagged_image_pdf('''
+      <img src="{image_url}" alt="">
+    ''')
+
+    assert not re.search(rb'/S /Figure(?:/|>>)', pdf)
+    assert re.search(rb'/Artifact\s+BMC', pdf)
+    assert b'/XObject' in pdf
+
+
+def test_pdf_tags_missing_image_alt_keeps_missing_description_evidence():
+    with capture_logs() as logs:
+        pdf = _tagged_image_pdf('''
+          <img src="{image_url}">
+        ''')
+
+    assert logs == [
+        f'ERROR: Image "{path2url(resource_path("pattern.png"))}" '
+        'has no required alt description']
+    assert len(re.findall(rb'/S /Figure(?:/|>>)', pdf)) == 1
+    assert b'/Alt ' not in pdf
+    assert b'/MCID' in pdf
+
+
+@pytest.mark.parametrize('attributes', [
+    'role="presentation"',
+    'role="none"',
+    'role="none presentation"',
+    'role="bogus presentation"',
+    'aria-hidden="true"',
+])
+@assert_no_logs
+def test_pdf_tags_presentational_images_are_artifacts(attributes):
+    pdf = _tagged_image_pdf(f'''
+      <img src="{{image_url}}" alt="presentational image" {attributes}>
+    ''')
+
+    assert not re.search(rb'/S /Figure(?:/|>>)', pdf)
+    assert re.search(rb'/Artifact\s+BMC', pdf)
+    assert b'/XObject' in pdf
+
+
+@pytest.mark.parametrize('role', ['button', 'marquee', 'suggestion'])
+@assert_no_logs
+def test_pdf_tags_presentational_role_fallback_keeps_supported_roles_semantic(
+        role):
+    pdf = _tagged_image_pdf(f'''
+      <img src="{{image_url}}" alt="{role} image" role="{role} presentation">
+    ''')
+
+    assert len(re.findall(rb'/S /Figure(?:/|>>)', pdf)) == 1
+    assert pdf.count(f'/Alt ({role} image)'.encode()) == 1
+
+
+@assert_no_logs
+def test_pdf_tags_figure_caption_has_one_figure_and_one_caption():
+    pdf = _tagged_image_pdf('''
+      <figure>
+        <img src="{image_url}" alt="Quarterly spending chart">
+        <figcaption>Quarterly spending</figcaption>
+      </figure>
+    ''')
+
+    assert len(re.findall(rb'/S /Figure(?:/|>>)', pdf)) == 1
+    assert len(re.findall(rb'/S /Caption(?:/|>>)', pdf)) == 1
+    assert pdf.count(b'/Alt (Quarterly spending chart)') == 1
+    _assert_caption_owned_by_figure(pdf)
+
+
+@assert_no_logs
+def test_pdf_tags_figure_caption_is_owned_before_the_image():
+    pdf = _tagged_image_pdf('''
+      <figure>
+        <figcaption>Quarterly spending</figcaption>
+        <img src="{image_url}" alt="Quarterly spending chart">
+      </figure>
+    ''')
+
+    assert len(re.findall(rb'/S /Figure(?:/|>>)', pdf)) == 1
+    assert len(re.findall(rb'/S /Caption(?:/|>>)', pdf)) == 1
+    assert pdf.count(b'/Alt (Quarterly spending chart)') == 1
+    _assert_caption_owned_by_figure(pdf)
+
+
+@assert_no_logs
+def test_pdf_tags_inline_svg_uses_title_without_duplicate_description():
+    pdf = FakeHTML(string='''
+      <html lang="en"><body>
+        <svg width="10" height="10" xmlns="http://www.w3.org/2000/svg">
+          <title>Quarterly spending chart</title>
+          <desc>Bars compare each quarter.</desc>
+          <rect width="10" height="10" fill="blue"/>
+        </svg>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+
+    assert len(re.findall(rb'/S /Figure(?:/|>>)', pdf)) == 1
+    assert pdf.count(b'/Alt (Quarterly spending chart)') == 1
+    assert b'/Alt (Bars compare each quarter.)' not in pdf
+
+
+@assert_no_logs
+def test_pdf_tags_inline_svg_uses_desc_when_title_is_missing():
+    pdf = FakeHTML(string='''
+      <html lang="en"><body>
+        <svg width="10" height="10" xmlns="http://www.w3.org/2000/svg">
+          <desc>Quarterly spending chart</desc>
+          <rect width="10" height="10" fill="blue"/>
+        </svg>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+
+    assert len(re.findall(rb'/S /Figure(?:/|>>)', pdf)) == 1
+    assert pdf.count(b'/Alt (Quarterly spending chart)') == 1
+
+
 def test_pdf_tags_table_headers():
     pdf = FakeHTML(string='''
       <html lang="fr">

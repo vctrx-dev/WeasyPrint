@@ -116,6 +116,8 @@ def add_tags(pdf, document, pdf_version, page_streams):
     table_annotation_elements = {}
     table_structure_elements = {}
     table_header_elements = {}
+    figure_elements = {}
+    pending_figure_captions = defaultdict(list)
     fragmented_table_elements = set()
     for page in document.pages:
         for box in page._page_box.descendants(placeholders=True):
@@ -141,7 +143,7 @@ def add_tags(pdf, document, pdf_version, page_streams):
             table_row_group_headers, table_row_indices,
             pending_table_headers, table_annotation_elements,
             table_structure_elements, table_header_elements,
-            fragmented_table_elements)
+            fragmented_table_elements, figure_elements, pending_figure_captions)
         for element in elements:
             structure_document['K'].append(element.reference)
         assert not tags
@@ -279,12 +281,16 @@ def _build_box_tree(
         table_column_group_headers,
         table_row_group_headers, table_row_indices, pending_table_headers,
         table_annotation_elements, table_structure_elements,
-        table_header_elements, fragmented_table_elements, table_context=None):
+        table_header_elements, fragmented_table_elements, figure_elements,
+        pending_figure_captions, table_context=None, figure_context=None):
     """Recursively build tag tree for given box and yield children."""
 
     # Special case for absolute elements.
     if isinstance(box, AbsolutePlaceholder):
         box = box._box
+
+    if box.is_decorative_image:
+        return
 
     if box.is_repeated_table_header:
         seen_annotations = set()
@@ -311,6 +317,8 @@ def _build_box_tree(
 
     element_tag = None if box.element is None else box.element_tag
     tag = _get_pdf_tag(element_tag)
+    if element_tag == 'figure':
+        figure_context = id(box.element)
     if tag == 'Table':
         table_box = box.get_wrapped_table() if box.is_table_wrapper else box
         table_element = (
@@ -333,8 +341,8 @@ def _build_box_tree(
                     table_row_group_headers, table_row_indices,
                     pending_table_headers, table_annotation_elements,
                     table_structure_elements, table_header_elements,
-                    fragmented_table_elements,
-                    table_context)
+                    fragmented_table_elements, figure_elements,
+                    pending_figure_captions, table_context, figure_context)
             return
     elif isinstance(box, boxes.MarginBox):
         # Build tree for margin boxes but don’t link it to main tree. It ensures that
@@ -350,8 +358,8 @@ def _build_box_tree(
                 table_row_group_headers, table_row_indices,
                 pending_table_headers, table_annotation_elements,
                 table_structure_elements, table_header_elements,
-                fragmented_table_elements,
-                table_context))
+                fragmented_table_elements, figure_elements,
+                pending_figure_captions, table_context, figure_context))
         return
     elif tag in ('TD', 'TH'):
         # Ignore anonymous blocks created for table cells.
@@ -391,8 +399,8 @@ def _build_box_tree(
                 table_row_group_headers, table_row_indices,
                 pending_table_headers, table_annotation_elements,
                 table_structure_elements, table_header_elements,
-                fragmented_table_elements,
-                table_context)
+                fragmented_table_elements, figure_elements,
+                pending_figure_captions, table_context, figure_context)
             for child in children:
                 parent['K'].append(child.reference)
             yield parent
@@ -425,6 +433,16 @@ def _build_box_tree(
         if table_structure_key is not None:
             table_structure_elements[table_structure_key] = element
 
+    if (tag == 'Figure' and figure_context is not None and
+            isinstance(box, boxes.ReplacedBox)):
+        if figure_context not in figure_elements:
+            figure_elements[figure_context] = element
+            for caption, caption_parent in pending_figure_captions.pop(
+                    figure_context, ()):
+                caption_parent['K'].remove(caption.reference)
+                caption['P'] = element.reference
+                element['K'].append(caption.reference)
+
     # Handle special cases.
     if tag == 'Figure':
         # Add extra data for images.
@@ -441,6 +459,10 @@ def _build_box_tree(
             title_elem = box.element.find('{http://www.w3.org/2000/svg}title')
             if title_elem is not None and title_elem.text:
                 element['Alt'] = pydyf.String(title_elem.text)
+            else:
+                desc_elem = box.element.find('{http://www.w3.org/2000/svg}desc')
+                if desc_elem is not None and desc_elem.text:
+                    element['Alt'] = pydyf.String(desc_elem.text)
         elif alt := box.element.attrib.get('alt'):
             element['Alt'] = pydyf.String(alt)
         else:
@@ -521,6 +543,8 @@ def _build_box_tree(
                     # In PDFs, nested lists are linked to the parent list, but in
                     # HTML, nested lists are linked to a parent’s list item.
                     child_parent = parent
+                elif child.element_tag == 'figcaption':
+                    child_parent = figure_elements.get(figure_context, element)
                 else:
                     child_parent = element
                 # Keep the current number of parent children, so that we can add the
@@ -536,13 +560,20 @@ def _build_box_tree(
                     table_row_group_headers, table_row_indices,
                     pending_table_headers, table_annotation_elements,
                     table_structure_elements, table_header_elements,
-                    fragmented_table_elements,
-                    table_context))
+                    fragmented_table_elements, figure_elements,
+                    pending_figure_captions, table_context, figure_context))
                 child_index = _table_child_insert_index(
                     child_parent, child_elements, table_structure_elements,
                     table_context, child_index)
                 child_parent['K'][child_index:child_index] = [
                     element.reference for element in child_elements]
+                if (child.element_tag == 'figcaption' and
+                        figure_context is not None and
+                        figure_context not in figure_elements):
+                    pending_figure_captions[figure_context].extend(
+                        (child_element, child_parent)
+                        for child_element in child_elements
+                        if child_element['S'] == '/Caption')
 
     if isinstance(box, boxes.ReplacedBox):
         # Add replaced box.
