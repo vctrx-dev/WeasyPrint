@@ -1,5 +1,6 @@
 """Test PDF-related code, including metadata, bookmarks and hyperlinks."""
 
+import gc
 import hashlib
 import io
 import re
@@ -7,7 +8,7 @@ from codecs import BOM_UTF16_BE
 
 import pytest
 
-from weasyprint import Attachment
+from weasyprint import HTML, Attachment
 from weasyprint.document import Document, DocumentMetadata
 from weasyprint.text.fonts import FontConfiguration
 from weasyprint.urls import path2url
@@ -873,6 +874,72 @@ def test_pdf_tags_explicit_table_headers_invalid_tokens():
     assert pdf.count(b'/Headers []') == 1
 
 
+def test_pdf_tags_explicit_table_headers_include_empty_headers():
+    pdf = FakeHTML(string='''
+      <html lang="en"><table><tr>
+        <th id="blank" scope="col"></th><td headers="blank">data</td>
+      </tr></table></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    header = next(
+        body for body in objects if re.search(rb'/S /TH(?:/|>>)', body))
+    header_id = re.search(rb'/ID \(([^)]*)\)', header).group(1)
+    table_cell = next(
+        body for body in objects if re.search(rb'/S /TD(?:/|>>)', body))
+    assert b'/Headers [(' + header_id + b')]' in table_cell
+
+
+def test_pdf_tags_table_headers_are_registered_in_id_tree():
+    pdf = FakeHTML(string='''
+      <html lang="en"><table>
+        <thead><tr><th id="header" scope="col">header</th></tr></thead>
+        <tbody><tr><td headers="header">data</td></tr></tbody>
+      </table></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = {
+        b'%s 0 R' % reference: body
+        for reference, body in re.findall(
+            rb'(\d+) 0 obj\n(.*?)\nendobj', pdf, re.S)}
+    header_reference, header = next(
+        (reference, body) for reference, body in objects.items()
+        if re.search(rb'/S /TH(?:/|>>)', body))
+    header_id = re.search(rb'/ID \(([^)]*)\)', header).group(1)
+    structure_root = next(
+        body for body in objects.values() if b'/Type /StructTreeRoot' in body)
+    id_tree_reference = re.search(rb'/IDTree (\d+ 0 R)', structure_root).group(1)
+    id_tree = objects[id_tree_reference]
+    assert b'(' + header_id + b') ' + header_reference in id_tree
+
+
+@pytest.mark.parametrize(('scope', 'rows'), [
+    ('col', '<tr><th scope="col"></th></tr><tr><td>data</td></tr>'),
+    ('row', '<tr><th scope="row"></th><td>data</td></tr>'),
+])
+def test_pdf_tags_empty_scoped_table_headers_are_associated(scope, rows):
+    pdf = FakeHTML(string=f'''
+      <html lang="en"><table><tbody>{rows}</tbody></table></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    header_id = next(
+        re.search(rb'/ID \(([^)]*)\)', body).group(1)
+        for body in objects if re.search(rb'/S /TH(?:/|>>)', body))
+    table_cell = next(
+        body for body in objects if re.search(rb'/S /TD(?:/|>>)', body))
+    assert b'/Headers [(' + header_id + b')]' in table_cell
+
+
+def test_pdf_tags_explicit_table_headers_exclude_the_principal_cell():
+    pdf = FakeHTML(string='''
+      <html lang="en"><table><tr>
+        <th id="header" headers="header">header</th>
+      </tr></table></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    header = next(
+        body for body in re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+        if re.search(rb'/S /TH(?:/|>>)', body))
+    assert b'/Headers []' in header
+
+
 @pytest.mark.parametrize(('table', 'cell_count'), [
     ('''
       <table><tr><th scope="ROW">row</th><td>row data</td></tr></table>
@@ -885,6 +952,7 @@ def test_pdf_tags_explicit_table_headers_invalid_tokens():
     ''', 2),
     ('''
       <table>
+        <colgroup span="2"></colgroup>
         <tr><th scope="colgroup" colspan="2">column group</th></tr>
         <tr><td>3</td><td>4</td></tr>
       </table>
@@ -908,6 +976,177 @@ def test_pdf_tags_table_header_scope_associations(table, cell_count):
             match := re.search(rb'/Headers \[\(([^)]*)\)\]', body)) else None
         for body in table_cells]
     assert actual_headers == expected_headers
+
+
+def test_pdf_tags_row_scope_associates_rowspans():
+    pdf = FakeHTML(string='''
+      <html lang="en"><table><tbody>
+        <tr><th id="row" scope="row" rowspan="2">row</th><td>first</td></tr>
+        <tr><td>second</td></tr>
+      </tbody></table></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    row_id = next(
+        re.search(rb'/ID \(([^)]*)\)', body).group(1)
+        for body in objects if re.search(rb'/S /TH(?:/|>>)', body))
+    table_cells = [
+        body for body in objects if re.search(rb'/S /TD(?:/|>>)', body)]
+    assert [
+        re.findall(rb'\(([^)]*)\)', re.search(
+            rb'/Headers \[([^]]*)\]', body).group(1))
+        for body in table_cells] == [[row_id], [row_id]]
+
+
+def test_pdf_tags_row_scope_only_associates_cells_to_its_right():
+    pdf = FakeHTML(string='''
+      <html lang="en"><table><tbody>
+        <tr><td>before</td><th id="row" scope="row">row</th><td>after</td></tr>
+      </tbody></table></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    row_id = next(
+        re.search(rb'/ID \(([^)]*)\)', body).group(1)
+        for body in objects if re.search(rb'/S /TH(?:/|>>)', body))
+    table_cells = [
+        body for body in objects if re.search(rb'/S /TD(?:/|>>)', body)]
+    assert [
+        re.findall(rb'\(([^)]*)\)', re.search(
+            rb'/Headers \[([^]]*)\]', body).group(1))
+        for body in table_cells] == [[], [row_id]]
+
+
+def test_pdf_tags_rowgroup_scope_only_associates_remaining_cells():
+    pdf = FakeHTML(string='''
+      <html lang="en"><table><tbody>
+        <tr><td>before</td><th id="group" scope="rowgroup">group</th><td>after</td></tr>
+        <tr><td>left</td><td>middle</td><td>right</td></tr>
+      </tbody></table></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    group_id = next(
+        re.search(rb'/ID \(([^)]*)\)', body).group(1)
+        for body in objects if re.search(rb'/S /TH(?:/|>>)', body))
+    table_cells = [
+        body for body in objects if re.search(rb'/S /TD(?:/|>>)', body)]
+    assert [
+        re.findall(rb'\(([^)]*)\)', re.search(
+            rb'/Headers \[([^]]*)\]', body).group(1))
+        for body in table_cells] == [[], [group_id], [], [group_id], [group_id]]
+
+
+def test_pdf_tags_colgroup_scope_uses_the_column_group():
+    pdf = FakeHTML(string='''
+      <html lang="en"><table>
+        <colgroup span="3"></colgroup>
+        <tbody>
+          <tr>
+            <th id="group" scope="colgroup">group</th>
+            <th id="second" scope="col">second</th>
+            <th id="third" scope="col">third</th>
+          </tr>
+          <tr><td>one</td><td>two</td><td>three</td></tr>
+        </tbody>
+      </table></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    headers = [
+        (re.search(rb'/ID \(([^)]*)\)', body).group(1), body)
+        for body in objects if re.search(rb'/S /TH(?:/|>>)', body)]
+    group_id = next(header_id for header_id, body in headers
+                    if b'/Scope' not in body)
+    second_id, third_id = [
+        header_id for header_id, body in headers
+        if b'/Scope /Column' in body]
+    table_cells = [
+        body for body in objects if re.search(rb'/S /TD(?:/|>>)', body)]
+    assert [
+        set(re.findall(rb'\(([^)]*)\)', re.search(
+            rb'/Headers \[([^]]*)\]', body).group(1)))
+        for body in table_cells] == [
+            {group_id}, {group_id, second_id}, {group_id, third_id}]
+
+
+def test_pdf_tags_colgroup_scope_associates_spanning_cells_in_each_group():
+    pdf = FakeHTML(string='''
+      <html lang="en"><table>
+        <colgroup span="1"></colgroup><colgroup span="1"></colgroup>
+        <tbody>
+          <tr>
+            <th scope="colgroup">first group</th>
+            <th scope="colgroup">second group</th>
+          </tr>
+          <tr><td colspan="2">spanning cell</td></tr>
+        </tbody>
+      </table></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    header_ids = {
+        re.search(rb'/ID \(([^)]*)\)', body).group(1)
+        for body in objects if re.search(rb'/S /TH(?:/|>>)', body)}
+    table_cell = next(
+        body for body in objects if re.search(rb'/S /TD(?:/|>>)', body))
+    assert set(re.findall(rb'\(([^)]*)\)', re.search(
+        rb'/Headers \[([^]]*)\]', table_cell).group(1))) == header_ids
+
+
+def test_pdf_tags_table_headers_follow_html_scope_order():
+    pdf = FakeHTML(string='''
+      <html lang="en"><table>
+        <colgroup span="3"></colgroup>
+        <tbody>
+          <tr>
+            <th scope="rowgroup">row group</th>
+            <th scope="colgroup" colspan="2">column group</th>
+          </tr>
+          <tr>
+            <th scope="col">first column</th>
+            <th scope="col">second column</th>
+            <th scope="col">third column</th>
+          </tr>
+          <tr>
+            <th scope="row">row</th><td>target</td><td>other</td>
+          </tr>
+        </tbody>
+      </table></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    headers = [
+        (re.search(rb'/ID \(([^)]*)\)', body).group(1), body)
+        for body in objects if re.search(rb'/S /TH(?:/|>>)', body)]
+    row_id = next(header_id for header_id, body in headers
+                  if b'/Scope /Row' in body)
+    column_ids = [header_id for header_id, body in headers
+                  if b'/Scope /Column' in body]
+    rowgroup_id, colgroup_id = [
+        header_id for header_id, body in headers if b'/Scope' not in body]
+    table_cells = [
+        re.findall(rb'\(([^)]*)\)', re.search(
+            rb'/Headers \[([^]]*)\]', body).group(1))
+        for body in objects if re.search(rb'/S /TD(?:/|>>)', body)]
+    assert [row_id, column_ids[1], rowgroup_id, colgroup_id] in table_cells
+
+
+def test_pdf_tags_column_scope_only_associates_subsequent_rows():
+    pdf = FakeHTML(string='''
+      <html lang="en"><table><tbody>
+        <tr><td>before</td><td>before second</td></tr>
+        <tr><th id="header" scope="col" rowspan="2">header</th><td>middle</td></tr>
+        <tr><td>middle second</td></tr>
+        <tr><td>after</td><td>after second</td></tr>
+      </tbody></table></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    header_id = next(
+        re.search(rb'/ID \(([^)]*)\)', body).group(1)
+        for body in objects if re.search(rb'/S /TH(?:/|>>)', body))
+    table_cells = [
+        body for body in objects if re.search(rb'/S /TD(?:/|>>)', body)]
+    headers = [
+        re.findall(rb'\(([^)]*)\)', re.search(
+            rb'/Headers \[([^]]*)\]', body).group(1))
+        for body in table_cells]
+    assert headers[0] == []
+    assert headers[-2] == [header_id]
 
 
 def test_pdf_tags_explicit_table_headers_across_pages():
@@ -938,7 +1177,7 @@ def test_pdf_tags_explicit_table_headers_across_pages():
         for body in table_cells)
 
 
-def test_pdf_tags_explicit_table_headers_prefer_current_page():
+def test_pdf_tags_explicit_table_headers_across_pages_forward_reference():
     rows = ''.join(
         f'<tr><td headers="header">row {index}</td></tr>'
         for index in range(8))
@@ -948,22 +1187,649 @@ def test_pdf_tags_explicit_table_headers_prefer_current_page():
           @page {{ size: 200px 120px; margin: 5px }}
           td, th {{ height: 35px }}
         </style>
+        <table><tbody>
+          {rows}
+          <tr><th id="header" scope="col">header</th></tr>
+        </tbody></table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    header_id = next(
+        re.search(rb'/ID \(([^)]*)\)', body).group(1)
+        for body in objects if re.search(rb'/S /TH(?:/|>>)', body))
+    table_cells = [
+        body for body in objects if re.search(rb'/S /TD(?:/|>>)', body)]
+    assert len(re.findall(rb'/Type /Page\b', pdf)) > 1
+    assert len(table_cells) == 8
+    assert all(
+        b'/Headers [(' + header_id + b')]' in body
+        for body in table_cells)
+
+
+def test_pdf_tags_inferred_table_headers_across_pages():
+    rows = ''.join(f'<tr><td>row {index}</td></tr>' for index in range(8))
+    pdf = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 120px; margin: 5px }}
+          td, th {{ height: 35px }}
+        </style>
+        <table><tbody>
+          <tr><th scope="col">header</th></tr>
+          {rows}
+        </tbody></table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    header_id = next(
+        re.search(rb'/ID \(([^)]*)\)', body).group(1)
+        for body in objects if re.search(rb'/S /TH(?:/|>>)', body))
+    table_cells = [
+        body for body in objects if re.search(rb'/S /TD(?:/|>>)', body)]
+    assert len(re.findall(rb'/Type /Page\b', pdf)) > 1
+    assert len(table_cells) == 8
+    assert all(
+        b'/Headers [(' + header_id + b')]' in body
+        for body in table_cells)
+
+
+def test_pdf_tags_fragmented_row_headers_use_the_contentful_header():
+    lines = '<br>'.join(['text'] * 20)
+    pdf = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 100px; margin: 5px }}
+          td, th {{ line-height: 20px }}
+        </style>
+        <table><tbody>
+          <tr><th scope="row">row</th><td>{lines}</td></tr>
+        </tbody></table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    headers = [
+        (re.search(rb'/ID \(([^)]*)\)', body).group(1), body)
+        for body in objects if re.search(rb'/S /TH(?:/|>>)', body) and
+        re.search(rb'/ID \(([^)]*)\)', body)]
+    content_header_ids = [
+        header_id for header_id, body in headers if b'/K []' not in body]
+    table_cells = [
+        body for body in objects if re.search(rb'/S /TD(?:/|>>)', body)]
+    assert len(re.findall(rb'/Type /Page\b', pdf)) > 1
+    assert len(table_cells) > 1
+    assert len(content_header_ids) == 1
+    assert [
+        re.findall(rb'\(([^)]*)\)', re.search(
+            rb'/Headers \[([^]]*)\]', body).group(1))
+        for body in table_cells] == [[content_header_ids[0]]] * len(table_cells)
+
+
+def test_pdf_tags_fragmented_headers_do_not_reference_themselves():
+    lines = '<br>'.join(['text'] * 20)
+    pdf = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 100px; margin: 5px }}
+          td, th {{ line-height: 20px }}
+        </style>
+        <table><tbody>
+          <tr>
+            <th id="row" headers="row" scope="row">row</th>
+            <td headers="row">{lines}</td>
+          </tr>
+        </tbody></table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    headers = [
+        body for body in objects if re.search(rb'/S /TH(?:/|>>)', body)]
+    assert len(headers) > 1
+    assert all(b'/Headers []' in body for body in headers)
+
+
+def test_pdf_tags_footer_headers_follow_body_rows_across_pages():
+    rows = ''.join(f'<tr><td>row {index}</td></tr>' for index in range(8))
+    pdf = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 120px; margin: 5px }}
+          td, th {{ height: 35px }}
+        </style>
         <table>
-          <thead><tr><th id="header" scope="col">header</th></tr></thead>
+          <tbody>{rows}</tbody>
+          <tfoot><tr><th scope="col">footer header</th></tr></tfoot>
+        </table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    table_cells = [
+        body for body in objects if re.search(rb'/S /TD(?:/|>>)', body)]
+    assert len(re.findall(rb'/Type /Page\b', pdf)) > 1
+    assert len(table_cells) == 8
+    assert all(b'/Headers []' in body for body in table_cells)
+
+
+def test_pdf_tags_rowgroup_headers_across_pages():
+    rows = ''.join(f'<tr><td>row {index}</td></tr>' for index in range(8))
+    pdf = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 120px; margin: 5px }}
+          td, th {{ height: 35px }}
+        </style>
+        <table><tbody>
+          <tr><th scope="rowgroup">group</th></tr>
+          {rows}
+        </tbody></table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    header_id = next(
+        re.search(rb'/ID \(([^)]*)\)', body).group(1)
+        for body in objects if re.search(rb'/S /TH(?:/|>>)', body))
+    table_cells = [
+        body for body in objects if re.search(rb'/S /TD(?:/|>>)', body)]
+    assert len(re.findall(rb'/Type /Page\b', pdf)) > 1
+    assert len(table_cells) == 8
+    assert all(
+        b'/Headers [(' + header_id + b')]' in body
+        for body in table_cells)
+
+
+def test_pdf_tags_colgroup_headers_across_pages():
+    rows = ''.join(f'<tr><td>row {index}</td></tr>' for index in range(8))
+    pdf = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 120px; margin: 5px }}
+          td, th {{ height: 35px }}
+        </style>
+        <table>
+          <colgroup span="1"></colgroup>
+          <tbody>
+            <tr><th scope="colgroup">group</th></tr>
+            {rows}
+          </tbody>
+        </table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    header_id = next(
+        re.search(rb'/ID \(([^)]*)\)', body).group(1)
+        for body in objects if re.search(rb'/S /TH(?:/|>>)', body))
+    table_cells = [
+        body for body in objects if re.search(rb'/S /TD(?:/|>>)', body)]
+    assert len(re.findall(rb'/Type /Page\b', pdf)) > 1
+    assert len(table_cells) == 8
+    assert all(
+        b'/Headers [(' + header_id + b')]' in body
+        for body in table_cells)
+
+
+def test_pdf_tags_repeated_table_headers_are_artifacts():
+    rows = ''.join(
+        f'<tr><td headers="header">row {index}</td></tr>'
+        for index in range(8))
+    pdf = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+              @page {{ size: 200px 120px; margin: 5px }}
+              td, th {{ height: 35px }}
+            </style>
+            <table>
+              <thead><tr><th id="header" scope="col">
+                header<a href="https://example.test">linked header</a>
+                <span style="position: absolute">absolute header</span>
+              </th></tr></thead>
           <tbody>{rows}</tbody>
         </table>
       </html>
     ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
     objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
-    header_ids = {
+    header_ids = [
         re.search(rb'/ID \(([^)]*)\)', body).group(1)
-        for body in objects if re.search(rb'/S /TH(?:/|>>)', body)}
+        for body in objects if re.search(rb'/S /TH(?:/|>>)', body)]
+    table_cells = [
+        body for body in objects if re.search(rb'/S /TD(?:/|>>)', body)]
+    page_count = len(re.findall(rb'/Type /Page\b', pdf))
+    assert page_count > 1
+    assert len(header_ids) == 1
+    assert all(
+        re.search(rb'/Headers \[\(([^)]*)\)\]', body).group(1) == header_ids[0]
+        for body in table_cells)
+    assert pdf.count(b'/S /Link') == 1
+    assert pdf.count(b'/Subtype /Link') == page_count
+    assert pdf.count(b'/Type /OBJR') == page_count
+    assert pdf.count(b'/StructParent ') == page_count
+    assert b'/ParentTree ' in pdf
+
+
+def test_pdf_tags_repeated_document_writes_keep_link_owners():
+    rows = ''.join(f'<tr><td>row {index}</td></tr>' for index in range(8))
+    document = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 120px; margin: 5px }}
+          td, th {{ height: 35px }}
+        </style>
+        <table>
+          <thead><tr><th><a href="https://example.test">header</a></th></tr>
+          </thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </html>
+    ''').render()
+    page_count = len(document.pages)
+
+    for _ in range(25):
+        pdf = document.write_pdf(pdf_tags=True, uncompressed_pdf=True)
+        assert pdf.count(b'/S /Link') == 1
+        assert pdf.count(b'/Subtype /Link') == page_count
+        assert pdf.count(b'/Type /OBJR') == page_count
+        assert pdf.count(b'/StructParent ') == page_count
+        del pdf
+        gc.collect()
+
+
+def test_pdf_tags_delayed_thead_is_semantic_before_repetitions():
+    rows = '''
+      <tr><td class="tall" headers="header">first row</td></tr>
+      <tr><td class="short" headers="header">second row</td></tr>
+      <tr><td class="short" headers="header">third row</td></tr>
+    '''
+    pdf = HTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 180px; margin: 5px }}
+          td, th {{ border: 0; padding: 0 }}
+          td.tall {{ height: 140px }}
+          td.short {{ height: 20px }}
+        </style>
+        <table>
+          <thead><tr><th id="header" scope="col">
+            <a href="https://example.test">header</a>
+          </th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    header = next(
+        body for body in objects if re.search(rb'/S /TH(?:/|>>)', body))
+    header_id = re.search(rb'/ID \(([^)]*)\)', header).group(1)
+    table_cells = [
+        body for body in objects if re.search(rb'/S /TD(?:/|>>)', body)]
+    assert len(re.findall(rb'/Type /Page\b', pdf)) > 1
+    assert len([
+        body for body in objects if re.search(rb'/S /TH(?:/|>>)', body)]) == 1
+    assert all(b'/Headers [(' + header_id + b')]' in body
+               for body in table_cells)
+    assert pdf.count(b'/S /Link') == 1
+    object_bodies = {
+        b'%s 0 R' % reference: body
+        for reference, body in re.findall(
+            rb'(\d+) 0 obj\n(.*?)\nendobj', pdf, re.S)}
+    table = next(
+        body for body in objects if re.search(rb'/S /Table(?:/|>>)', body))
+    table_children = re.findall(
+        rb'\d+ 0 R', re.search(rb'/K \[([^]]*)\]', table).group(1))
+    table_group_roles = [
+        re.search(rb'/S /(THead|TBody)', object_bodies[reference]).group(1)
+        for reference in table_children
+        if re.search(rb'/S /(THead|TBody)', object_bodies[reference])]
+    assert table_group_roles == [b'THead', b'TBody']
+
+
+def test_pdf_tags_repeated_table_header_widgets_have_structural_owners():
+    rows = ''.join(f'<tr><td>row {index}</td></tr>' for index in range(8))
+    pdf = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 120px; margin: 5px }}
+          td, th {{ height: 35px }}
+        </style>
+        <table>
+          <thead><tr><th><input name="header-input"></th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </html>
+    ''').write_pdf(pdf_tags=True, pdf_forms=True, uncompressed_pdf=True)
+    page_count = len(re.findall(rb'/Type /Page\b', pdf))
+    assert page_count > 1
+    assert pdf.count(b'/S /Form') == page_count
+    assert pdf.count(b'/Subtype /Widget') == page_count
+    assert pdf.count(b'/Type /OBJR') == page_count
+    assert pdf.count(b'/StructParent ') == page_count
+    assert b'/ParentTree ' in pdf
+
+
+def test_pdf_tags_repeated_table_header_image_links_have_structural_owners():
+    rows = ''.join(f'<tr><td>row {index}</td></tr>' for index in range(8))
+    pdf = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 120px; margin: 5px }}
+          td, th {{ height: 35px }}
+        </style>
+        <table>
+          <thead><tr><th><a href="https://example.test"><img
+            alt="icon"
+            src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+          ></a></th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    page_count = len(re.findall(rb'/Type /Page\b', pdf))
+    assert page_count > 1
+    assert len(re.findall(rb'/S /TH(?:/|>>)', pdf)) == 1
+    assert len(re.findall(rb'/S /Figure(?:/|>>)', pdf)) == 1
+    assert pdf.count(b'/S /Link') == 1
+    assert pdf.count(b'/Subtype /Link') == 2 * page_count
+    assert pdf.count(b'/Type /OBJR') == 2 * page_count
+    assert pdf.count(b'/StructParent ') == 2 * page_count
+    assert b'/ParentTree ' in pdf
+
+
+@pytest.mark.parametrize(
+    'positioning', ['float: left', 'position: absolute', 'position: fixed'])
+def test_pdf_tags_repeated_table_header_out_of_flow_images_are_canonical(
+        positioning):
+    rows = ''.join(f'<tr><td>row {index}</td></tr>' for index in range(8))
+    pdf = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 120px; margin: 5px }}
+          td, th {{ height: 35px }}
+        </style>
+        <table>
+          <thead><tr><th><a href="https://example.test"><img
+            alt="header icon" style="{positioning}"
+            src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+          ></a></th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    page_count = len(re.findall(rb'/Type /Page\b', pdf))
+    assert page_count > 1
+    assert len(re.findall(rb'/S /Figure(?:/|>>)', pdf)) == 1
+    assert pdf.count(b'/Alt (header icon)') == 1
+    assert pdf.count(b'/S /Link') == 1
+    assert pdf.count(b'/Subtype /Link') == 2 * page_count
+    assert pdf.count(b'/Type /OBJR') == 2 * page_count
+    link_annotations = [
+        body for body in re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+        if b'/Subtype /Link' in body]
+    assert all(b'/StructParent ' in annotation for annotation in link_annotations)
+
+
+def test_pdf_tags_repeated_table_header_fixed_text_is_artifact():
+    rows = ''.join('<tr><td></td></tr>' for _ in range(8))
+    pdf = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 120px; margin: 5px }}
+          td, th {{ height: 35px }}
+        </style>
+        <table>
+          <thead><tr><th><span style="position: fixed">header</span></th></tr>
+          </thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    assert len(re.findall(rb'/Type /Page\b', pdf)) > 1
+    # The inline element and its text are the two canonical Span elements.
+    assert len(re.findall(rb'/S /Span(?:/|>>)', pdf)) == 2
+
+
+@pytest.mark.parametrize('positioning', ['absolute', 'fixed'])
+def test_pdf_tags_repeated_table_header_fixed_container_image_is_artifact(
+        positioning):
+    rows = ''.join(f'<tr><td>row {index}</td></tr>' for index in range(8))
+    pdf = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 120px; margin: 5px }}
+          td, th {{ height: 35px }}
+        </style>
+        <table>
+          <thead><tr><th><div style="position: fixed"><img
+            alt="fixed header icon" style="position: {positioning}"
+            src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+          ></div></th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    page_count = len(re.findall(rb'/Type /Page\b', pdf))
+    assert page_count > 1
+    assert len(re.findall(rb'/S /Figure(?:/|>>)', pdf)) == 1
+    assert pdf.count(b'/Alt (fixed header icon)') == 1
+    assert pdf.count(b'/Artifact\nBMC') >= page_count - 1
+
+
+def test_pdf_tags_fragmented_table_has_one_logical_structure():
+    rows = ''.join(
+        f'<tr><td headers="first">first {index}</td>'
+        f'<td headers="second">second {index}</td></tr>'
+        for index in range(8))
+    pdf = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 120px; margin: 5px }}
+          td, th {{ height: 35px }}
+        </style>
+        <table>
+          <thead><tr>
+            <th id="first" scope="col">first</th>
+            <th id="second" scope="col">second</th>
+          </tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    tables = [
+        body for body in objects if re.search(rb'/S /Table(?:/|>>)', body)]
+    headers = [
+        body for body in objects if re.search(rb'/S /TH(?:/|>>)', body)]
+    assert len(re.findall(rb'/Type /Page\b', pdf)) > 1
+    assert len(tables) == 1
+    assert len(headers) == 2
+    assert len([
+        body for body in objects if re.search(rb'/S /THead(?:/|>>)', body)]) == 1
+    assert len([
+        body for body in objects if re.search(rb'/S /TBody(?:/|>>)', body)]) == 1
+    header_ids = {
+        re.search(rb'/ID \(([^)]*)\)', body).group(1) for body in headers}
+    table_cells = [
+        body for body in objects
+        if re.search(rb'/S /TD(?:/|>>)', body)]
     referenced_ids = {
-        match.group(1)
-        for body in objects if re.search(rb'/S /TD(?:/|>>)', body)
-        if (match := re.search(rb'/Headers \[\(([^)]*)\)\]', body))}
-    assert len(header_ids) > 1
-    assert referenced_ids == header_ids
+        re.search(rb'/Headers \[\(([^)]*)\)\]', body).group(1)
+        for body in table_cells}
+    assert referenced_ids == set(header_ids)
+
+    structure_root = next(
+        body for body in objects if b'/Type /StructTreeRoot' in body)
+    assert b'/IDTree ' in structure_root
+    id_tree = next(
+        body for body in objects
+        if b'/Names' in body and all(
+            b'(' + header_id + b')' in body for header_id in header_ids))
+    assert all(id_tree.count(b'(' + header_id + b')') == 1
+               for header_id in header_ids)
+
+
+def test_pdf_tags_fragmented_table_bottom_caption_is_canonical():
+    rows = ''.join(f'<tr><td>row {index}</td></tr>' for index in range(8))
+    pdf = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 120px; margin: 5px }}
+          td, th {{ height: 35px }}
+          caption {{ caption-side: bottom }}
+        </style>
+        <table>
+          <caption>table caption</caption>
+          <thead><tr><th scope="col">header</th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = {
+        b'%s 0 R' % reference: body
+        for reference, body in re.findall(
+            rb'(\d+) 0 obj\n(.*?)\nendobj', pdf, re.S)}
+    table_reference, table = next(
+        (reference, body) for reference, body in objects.items()
+        if re.search(rb'/S /Table(?:/|>>)', body))
+    caption = next(
+        body for body in objects.values() if re.search(rb'/S /Caption(?:/|>>)', body))
+    assert len(re.findall(rb'/Type /Page\b', pdf)) > 1
+    assert len([
+        body for body in objects.values() if re.search(rb'/S /Table(?:/|>>)', body)
+    ]) == 1
+    assert b'/P ' + table_reference in caption
+
+
+def test_pdf_tags_fragmented_table_top_caption_is_canonical():
+    caption_lines = '<br>'.join(['table caption'] * 20)
+    rows = ''.join(f'<tr><td>row {index}</td></tr>' for index in range(8))
+    pdf = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 120px; margin: 5px }}
+          td, th {{ height: 35px }}
+          caption {{ caption-side: top; line-height: 20px }}
+        </style>
+        <table>
+          <caption>{caption_lines}</caption>
+          <thead><tr><th scope="col">header</th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = {
+        b'%s 0 R' % reference: body
+        for reference, body in re.findall(
+            rb'(\d+) 0 obj\n(.*?)\nendobj', pdf, re.S)}
+    table_reference, _ = next(
+        (reference, body) for reference, body in objects.items()
+        if re.search(rb'/S /Table(?:/|>>)', body))
+    captions = [
+        body for body in objects.values() if re.search(rb'/S /Caption(?:/|>>)', body)]
+    assert len(re.findall(rb'/Type /Page\b', pdf)) > 1
+    assert len([
+        body for body in objects.values() if re.search(rb'/S /Table(?:/|>>)', body)
+    ]) == 1
+    assert len(captions) == 1
+    assert b'/P ' + table_reference in captions[0]
+
+
+def test_pdf_tags_fragmented_table_artifacts_repeated_headers():
+    rows = ''.join(f'<tr><td>row {index}</td></tr>' for index in range(8))
+    pdf = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 120px; margin: 5px }}
+          table {{ border-collapse: collapse }}
+          td, th {{ border: 0; height: 35px; padding: 0 }}
+        </style>
+        <table>
+          <thead><tr><th scope="col">header</th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    structure_root = next(
+        body for body in objects if b'/Type /StructTreeRoot' in body)
+    page_count = len(re.findall(rb'/Type /Page\b', pdf))
+    assert page_count > 1
+    assert b'/ParentTree ' in structure_root
+    assert pdf.count(b'/StructParents ') == page_count
+    assert pdf.count(b'/Artifact\nBMC') >= page_count - 1
+    assert b'/MCID ' in pdf
+
+
+def test_pdf_tags_fragmented_table_reuses_body_header_structure():
+    lines = '<br>'.join(['text'] * 20)
+    pdf = FakeHTML(string=f'''
+      <html lang="en">
+        <style>
+          @page {{ size: 200px 100px; margin: 5px }}
+          td, th {{ line-height: 20px }}
+        </style>
+        <table>
+          <thead><tr><th id="column" scope="col">column</th></tr></thead>
+          <tbody><tr>
+            <th id="row" scope="row">row</th>
+            <td headers="column row">{lines}</td>
+          </tr></tbody>
+        </table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    headers = [
+        body for body in objects if re.search(rb'/S /TH(?:/|>>)', body)]
+    table_cells = [
+        body for body in objects if re.search(rb'/S /TD(?:/|>>)', body)]
+    header_ids = {
+        re.search(rb'/ID \(([^)]*)\)', body).group(1) for body in headers}
+    assert len(re.findall(rb'/Type /Page\b', pdf)) > 1
+    assert len([
+        body for body in objects if re.search(rb'/S /Table(?:/|>>)', body)]) == 1
+    assert len(headers) == 2
+    assert len(table_cells) == 1
+    assert re.findall(
+        rb'\(([^)]*)\)', re.search(rb'/Headers \[([^]]*)\]', table_cells[0]).group(1)
+    ) == sorted(header_ids)
+
+
+def test_pdf_tags_fragmented_table_persists_rowspan_row_headers():
+    pdf = FakeHTML(string='''
+      <html lang="en">
+        <style>
+          @page { size: 200px 120px; margin: 5px }
+          td, th { height: 35px }
+        </style>
+        <table>
+          <thead><tr>
+            <th scope="col">first column</th>
+            <th scope="col">second column</th>
+          </tr></thead>
+          <tbody>
+            <tr><th scope="row" rowspan="3">row header</th><td>one</td></tr>
+            <tr><td>two</td></tr>
+            <tr><td>three</td></tr>
+            <tr><td>after</td><td>after second</td></tr>
+          </tbody>
+        </table>
+      </html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    headers = [
+        (re.search(rb'/ID \(([^)]*)\)', body).group(1), body)
+        for body in objects if re.search(rb'/S /TH(?:/|>>)', body)]
+    row_id = next(header_id for header_id, body in headers
+                  if b'/Scope /Row' in body)
+    column_ids = [header_id for header_id, body in headers
+                  if b'/Scope /Column' in body]
+    table_cells = [
+        re.findall(rb'\(([^)]*)\)', re.search(
+            rb'/Headers \[([^]]*)\]', body).group(1))
+        for body in objects if re.search(rb'/S /TD(?:/|>>)', body)]
+    assert len(re.findall(rb'/Type /Page\b', pdf)) > 1
+    assert table_cells == [
+        [row_id, column_ids[1]],
+        [row_id, column_ids[1]],
+        [row_id, column_ids[1]],
+        [column_ids[0]],
+        [column_ids[1]],
+    ]
 
 
 def test_pdf_tags_explicit_table_headers_stay_in_table():
@@ -1026,7 +1892,8 @@ def test_pdf_tags_grouped_table_with_block_header_content():
         header_ids.append(re.search(rb'/ID \(([^)]*)\)', body).group(1))
 
     assert len(header_ids) == 12
-    assert [pdf.count(b'(' + id + b')') for id in header_ids] == [
+    # Each generated header ID is also registered once in the PDF IDTree.
+    assert [pdf.count(b'(' + id + b')') - 1 for id in header_ids] == [
         1, 13, 11, 6, 5, 5, 5, 6, 6, 13, 13, 4]
 
 

@@ -17,6 +17,9 @@ def table_layout(context, table, bottom_space, skip_stack, containing_block,
         avoid_page_break, block_container_layout, block_level_page_break,
         force_page_break, remove_placeholders)
 
+    # Keep source-table state while ``table`` becomes the laid-out fragment.
+    source_table = table
+
     # Remove top and bottom decorations for split tables.
     has_header = table.children and table.children[0].is_header
     has_footer = table.children and table.children[-1].is_footer
@@ -443,11 +446,14 @@ def table_layout(context, table, bottom_space, skip_stack, containing_block,
         else:
             header_footer_bottom_space = -inf
 
+        header_fixed_boxes = ()
         if has_header:
+            fixed_boxes_start = len(fixed_boxes)
             header = table.children[0]
             header, resume_at, next_page = group_layout(
                 header, position_y, header_footer_bottom_space,
                 skip_stack=None, page_is_empty=False)
+            header_fixed_boxes = fixed_boxes[fixed_boxes_start:]
             if header and not resume_at:
                 header_height = header.height + border_spacing_y
             else:
@@ -491,7 +497,7 @@ def table_layout(context, table, bottom_space, skip_stack, containing_block,
                 end_position_y += footer_height
                 return (
                     header, new_table_children, footer, end_position_y, resume_at,
-                    next_page)
+                    next_page, header_fixed_boxes)
             else:
                 # We could not fit any content, drop the footer.
                 footer = None
@@ -505,7 +511,7 @@ def table_layout(context, table, bottom_space, skip_stack, containing_block,
             if new_table_children or not table_rows or not page_is_empty:
                 return (
                     header, new_table_children, footer, end_position_y, resume_at,
-                    next_page)
+                    next_page, header_fixed_boxes)
             else:
                 # We could not fit any content, drop the header.
                 header = None
@@ -521,7 +527,7 @@ def table_layout(context, table, bottom_space, skip_stack, containing_block,
                 end_position_y += footer_height
                 return (
                     header, new_table_children, footer, end_position_y, resume_at,
-                    next_page)
+                    next_page, header_fixed_boxes)
             else:
                 # We could not fit any content, drop the footer.
                 footer = None
@@ -530,7 +536,9 @@ def table_layout(context, table, bottom_space, skip_stack, containing_block,
         assert not footer
         new_table_children, resume_at, next_page, end_position_y = (
             body_groups_layout(skip_stack, position_y, bottom_space, page_is_empty))
-        return header, new_table_children, footer, end_position_y, resume_at, next_page
+        return (
+            header, new_table_children, footer, end_position_y, resume_at,
+            next_page, header_fixed_boxes)
 
     def get_column_cells(table, column):
         """Return closure getting the column cells."""
@@ -541,7 +549,8 @@ def table_layout(context, table, bottom_space, skip_stack, containing_block,
             for cell in row.children
             if cell.grid_x == column.grid_x]
 
-    header, new_table_children, footer, position_y, resume_at, next_page = (
+    (header, new_table_children, footer, position_y, resume_at, next_page,
+     header_fixed_boxes) = (
         all_groups_layout())
 
     if new_table_children is None:
@@ -550,6 +559,14 @@ def table_layout(context, table, bottom_space, skip_stack, containing_block,
         adjoining_margins = []
         collapsing_through = False
         return table, resume_at, next_page, adjoining_margins, collapsing_through
+
+    if (header is not None and skip_stack is not None and
+            source_table.has_rendered_table_header):
+        # Repeated headers stay painted on continuation pages, but only their
+        # first rendered instance belongs in the semantic tree.
+        header.is_repeated_table_header = True
+        for fixed_box in header_fixed_boxes:
+            fixed_box.is_table_header_fixed_content = True
 
     table = table.copy_with_children(
         ([header] if header is not None else []) +
@@ -606,6 +623,11 @@ def table_layout(context, table, bottom_space, skip_stack, containing_block,
         remove_placeholders(context, [table], absolute_boxes, fixed_boxes)
         table = None
         resume_at = None
+    if table is not None:
+        table.is_fragmented_table = (
+            has_header and (skip_stack is not None or resume_at is not None))
+        if header is not None:
+            source_table.has_rendered_table_header = True
     adjoining_margins = []
     collapsing_through = False
 

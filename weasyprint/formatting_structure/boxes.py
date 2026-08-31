@@ -75,6 +75,9 @@ class Box:
     is_column = False
     is_leader = False
     is_outside_marker = False
+    is_repeated_table_header = False
+    is_table_header_fixed_content = False
+    has_rendered_table_header = False
 
     # Other properties
     transformation_matrix = None

@@ -36,6 +36,11 @@ def add_links(links_and_anchors, matrix, pdf, page, names, tags):
             })
             if tags is not None:
                 box.link_annotation['Contents'] = pydyf.String(link_target)
+                link_annotations = getattr(box, 'link_annotations', None)
+                if link_annotations is None:
+                    box.link_annotations = link_annotations = {}
+                link_annotations.setdefault(tags.annotation_token, []).append(
+                    box.link_annotation)
             if link_type == 'internal':
                 box.link_annotation['Dest'] = pydyf.String(link_target)
             else:

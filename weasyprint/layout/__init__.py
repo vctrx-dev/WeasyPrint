@@ -16,7 +16,7 @@ from math import inf
 
 from ..formatting_structure import boxes, build
 from ..logger import PROGRESS_LOGGER
-from .absolute import absolute_box_layout, absolute_layout
+from .absolute import AbsolutePlaceholder, absolute_box_layout, absolute_layout
 from .background import layout_backgrounds
 from .block import block_level_layout
 from .page import make_all_pages, make_margin_boxes
@@ -75,14 +75,27 @@ def initialize_page_maker(context, root_box):
         resume_at, next_page, right_page, page_state, remake_state))
 
 
+def _copy_fixed_box(box):
+    """Copy a fixed box without sharing its out-of-flow descendants."""
+    if isinstance(box, AbsolutePlaceholder):
+        return box.copy()
+    new_box = box.copy()
+    if isinstance(box, boxes.ParentBox):
+        new_box.children = [_copy_fixed_box(child) for child in box.children]
+    return new_box
+
+
 def layout_fixed_boxes(context, pages, containing_page):
     """Lay out and yield fixed boxes of ``pages`` on ``containing_page``."""
     for page in pages:
         for box in page.fixed_boxes:
+            is_table_header_fixed_content = box.is_table_header_fixed_content
             # As replaced boxes are never copied during layout, ensure that we
             # have different boxes (with a possibly different layout) for
             # each pages.
-            if isinstance(box, boxes.ReplacedBox):
+            if is_table_header_fixed_content:
+                box = _copy_fixed_box(box)
+            elif isinstance(box, boxes.ReplacedBox):
                 box = box.copy()
             # Absolute boxes in fixed boxes are rendered as fixed boxes'
             # children, even when they are fixed themselves.
@@ -90,6 +103,8 @@ def layout_fixed_boxes(context, pages, containing_page):
             absolute_box, _ = absolute_box_layout(
                 context, box, containing_page, absolute_boxes,
                 bottom_space=-inf, skip_stack=None)
+            if is_table_header_fixed_content:
+                absolute_box.is_repeated_table_header = True
             yield absolute_box
             while absolute_boxes:
                 new_absolute_boxes = []

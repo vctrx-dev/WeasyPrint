@@ -20,6 +20,13 @@ from .anchors import (  # isort:skip
     add_annotations, add_forms, add_links, add_outlines, resolve_links,
     write_pdf_attachment)
 
+class _Tags(dict):
+    """Marked-content records and their unique per-page annotation token."""
+    def __init__(self):
+        super().__init__()
+        self.annotation_token = object()
+
+
 VARIANTS = {
     name: data
     for variants in (pdfa.VARIANTS, pdfua.VARIANTS, pdfx.VARIANTS, debug.VARIANTS)
@@ -176,7 +183,7 @@ def generate_pdf(document, target, zoom, **options):
     pdf_pages, page_streams = [], []
     for page_number, (page, links_and_anchors) in enumerate(
             zip(document.pages, page_links_and_anchors)):
-        tags = {} if pdf_tags else None
+        tags = _Tags() if pdf_tags else None
 
         # Draw from the top-left corner
         matrix = Matrix(scale, 0, 0, -scale, 0, page.height * scale)

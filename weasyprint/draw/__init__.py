@@ -15,18 +15,58 @@ from .border import draw_border, draw_line, draw_outline, rounded_box, set_mask_
 from .color import styled_color
 from .text import draw_text
 
+_MISSING = object()
+_REPEATED_TABLE_ATTRIBUTES = ('is_repeated_table_header',)
+
+
+def _set_repeated_table_artifacts(page):
+    """Temporarily mark descendants of repeated table groups as artifacts."""
+    previous_values = []
+    marked = set()
+    groups = [
+        box for box in page.descendants(placeholders=True)
+        if any(
+            getattr(box, attribute) for attribute in
+            _REPEATED_TABLE_ATTRIBUTES)]
+    for group in groups:
+        for attribute in _REPEATED_TABLE_ATTRIBUTES:
+            if not getattr(group, attribute):
+                continue
+            for box in group.descendants(placeholders=True):
+                marker = id(box), attribute
+                if not isinstance(box, boxes.Box) or marker in marked:
+                    continue
+                marked.add(marker)
+                previous_values.append((
+                    box, attribute, box.__dict__.get(attribute, _MISSING)))
+                box.__dict__[attribute] = True
+    return previous_values
+
+
+def _restore_repeated_table_artifacts(previous_values):
+    """Restore the marker state used while a page was painted."""
+    for box, attribute, value in reversed(previous_values):
+        if value is _MISSING:
+            del box.__dict__[attribute]
+        else:
+            box.__dict__[attribute] = value
+
 
 def draw_page(page, stream):
     """Draw the given PageBox."""
-    marks = page.style['marks']
-    stacking_context = StackingContext.from_page(page)
-    draw_background(
-        stream, stacking_context.box.background, clip_box=False, bleed=page.bleed,
-        marks=marks)
-    set_mask_border(stream, page)
-    draw_background(stream, page.canvas_background, clip_box=False)
-    draw_border(stream, page)
-    draw_stacking_context(stream, stacking_context)
+    previous_values = _set_repeated_table_artifacts(page)
+    try:
+        marks = page.style['marks']
+        stacking_context = StackingContext.from_page(page)
+        draw_background(
+            stream, stacking_context.box.background, clip_box=False,
+            bleed=page.bleed, marks=marks)
+        set_mask_border(stream, page)
+        draw_background(stream, page.canvas_background, clip_box=False)
+        draw_border(stream, page)
+        draw_stacking_context(stream, stacking_context)
+    finally:
+        _restore_repeated_table_artifacts(previous_values)
 
 
 def draw_stacking_context(stream, stacking_context):
@@ -630,14 +670,20 @@ def draw_inline_level(stream, page, box, offset_x=0, text_overflow='clip',
                 else:
                     child_offset_x = offset_x + child.position_x - box.position_x
                 if isinstance(child, boxes.TextBox):
-                    with stream.marked(child, 'Span'):
+                    marker = (
+                        stream.artifact() if child.is_repeated_table_header
+                        else stream.marked(child, 'Span'))
+                    with marker:
                         draw_text(
                             stream, child, child_offset_x, text_overflow, ellipsis)
                 else:
                     draw_inline_level(
                         stream, page, child, child_offset_x, text_overflow, ellipsis)
         elif isinstance(box, boxes.InlineReplacedBox):
-            with stream.marked(box, 'Figure'):
+            marker = (
+                stream.artifact() if box.is_repeated_table_header
+                else stream.marked(box, 'Figure'))
+            with marker:
                 draw_replacedbox(stream, box)
         else:
             assert isinstance(box, boxes.TextBox)
@@ -648,7 +694,10 @@ def draw_inline_level(stream, page, box, offset_x=0, text_overflow='clip',
 def draw_block_level(page, stream, blocks_and_cells):
     for block, blocks_and_cells in blocks_and_cells.items():
         if isinstance(block, boxes.ReplacedBox):
-            with stream.marked(block, 'Figure'):
+            marker = (
+                stream.artifact() if block.is_repeated_table_header
+                else stream.marked(block, 'Figure'))
+            with marker:
                 draw_replacedbox(stream, block)
         elif block.children:
             if isinstance(block.children[-1], boxes.LineBox):
