@@ -1014,6 +1014,35 @@ def _tagged_image_pdf(content):
     ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
 
 
+def _assert_tagged_transparency_group_has_parent_tree_entry(pdf):
+    """Ensure tagged Form content has a ParentTree entry and an MCR link."""
+    objects = _pdf_structure_objects(pdf)
+    group_reference, group = next(
+        (reference, body) for reference, body in objects.items()
+        if re.search(rb'/Type /XObject.*?/Subtype /Form', body, re.S) and
+        b'/S /Transparency' in body and b'/MCID' in body)
+    struct_parents = re.search(rb'/StructParents (\d+)', group)
+    assert struct_parents
+
+    structure_root = next(
+        body for body in objects.values() if b'/Type /StructTreeRoot' in body)
+    parent_tree_reference = re.search(
+        rb'/ParentTree (\d+ 0 R)', structure_root).group(1)
+    parent_tree = objects[parent_tree_reference]
+    entry = re.search(
+        rb'(?<!\d)' + struct_parents.group(1) + rb' \[([^]]*)\]',
+        parent_tree, re.S)
+    assert entry
+
+    figure_reference, figure = next(
+        (reference, body) for reference, body in objects.items()
+        if re.search(rb'/S /Figure(?:/|>>)', body))
+    assert figure_reference in re.findall(rb'\d+ 0 R', entry.group(1))
+    assert re.search(
+        rb'/K \[<</Type /MCR/MCID \d+/Pg \d+ 0 R/Stm ' +
+        re.escape(group_reference) + rb'>>\]', figure)
+
+
 def _assert_caption_owned_by_figure(pdf):
     objects = {
         reference: body
@@ -1055,6 +1084,65 @@ def test_pdf_tags_one_pixel_state_carrier_is_meaningful():
     assert len(re.findall(rb'/S /Figure(?:/|>>)', pdf)) == 1
     assert pdf.count(b'/Alt (Checked checkbox:)') == 1
     assert b'/MCID' in pdf
+
+
+@assert_no_logs
+def test_pdf_tags_absolute_state_image_in_css_table_keeps_surrounding_content():
+    image_url = path2url(resource_path('pattern.png'))
+    pdf = FakeHTML(string=f'''
+      <html lang="en"><head><style>
+        .control-line {{
+          display: table;
+          width: 100%;
+          table-layout: auto;
+          border-collapse: collapse;
+        }}
+        .control-slot {{ display: table-cell; width: 13pt; vertical-align: middle }}
+        .label-slot {{
+          display: table-cell;
+          padding-right: 3pt;
+          white-space: nowrap;
+        }}
+        .value-slot {{
+          display: table-cell;
+          width: 100%;
+          vertical-align: middle;
+          border-bottom: .75pt solid #000;
+        }}
+        .checkbox-control {{
+          position: relative;
+          display: inline-block;
+          width: 11pt;
+          height: 11pt;
+        }}
+        .semantic-state {{
+          position: absolute;
+          width: 1pt;
+          height: 1pt;
+          opacity: 0;
+        }}
+      </style></head><body>
+        <p>Before the control line.</p>
+        <span class="control-line">
+          <span class="control-slot">
+            <span class="checkbox-control">
+              <span class="checkbox-box">✓</span>
+              <img class="semantic-state" src="{image_url}"
+                   alt="Checked checkbox:">
+            </span>
+          </span>
+          <span class="label-slot">County Office:</span>
+          <span class="value-slot">Assessor</span>
+        </span>
+        <p>After the control line.</p>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+
+    assert len(re.findall(rb'/S /Figure(?:/|>>)', pdf)) == 1
+    assert pdf.count(b'/Alt (Checked checkbox:)') == 1
+    assert pdf.count(b'/MCID') >= 5
+    assert b'/ParentTree ' in pdf
+    _assert_tagged_transparency_group_has_parent_tree_entry(pdf)
 
 
 @assert_no_logs

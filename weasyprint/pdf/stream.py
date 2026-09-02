@@ -21,6 +21,7 @@ class Stream(pydyf.Stream):
         self._resources = resources
         self._images = images
         self._tags = tags
+        self._mcid = 0
         self._color_profiles = color_profiles
         self._output_intent = output_intent
         self._current_color = self._current_color_stroke = None
@@ -283,9 +284,10 @@ class Stream(pydyf.Stream):
     def marked(self, box, tag):
         if self._tags is not None:
             property_list = None
-            mcid = len(self._tags)
+            mcid = self._mcid
+            self._mcid += 1
             assert box not in self._tags
-            self._tags[box] = {'tag': tag, 'mcid': mcid}
+            self._tags[box] = {'tag': tag, 'mcid': mcid, 'stream': self}
             property_list = pydyf.Dictionary({'MCID': mcid})
             super().begin_marked_content(tag, property_list)
         try:

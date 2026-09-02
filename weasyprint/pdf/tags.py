@@ -39,6 +39,25 @@ def _get_link_annotations(box, tags):
     return (box.link_annotation,) if box.link_annotation else ()
 
 
+def _add_marked_content(element, kid, page_number, nums, form_nums, pdf):
+    """Add a marked-content kid and its ParentTree mapping."""
+    stream = kid['stream']
+    if stream.extra.get('Subtype') == '/Form':
+        stream_nums = form_nums.setdefault(stream, {})
+        assert kid['mcid'] not in stream_nums
+        stream_nums[kid['mcid']] = element.reference
+        return pydyf.Dictionary({
+            'Type': '/MCR',
+            'MCID': kid['mcid'],
+            'Pg': pdf.page_references[page_number],
+            'Stm': stream.reference,
+        })
+
+    assert kid['mcid'] not in nums
+    nums[kid['mcid']] = element.reference
+    return kid['mcid']
+
+
 def _set_table_row_indices(table_element, row_indices):
     """Set logical row indices from the source table's row-group order."""
     if row_indices or table_element is None:
@@ -105,6 +124,7 @@ def add_tags(pdf, document, pdf_version, page_streams):
     # Map content.
     content_mapping['Nums'] = pydyf.Array()
     annotations = []
+    form_nums = {}
     table_header_ids = defaultdict(dict)
     table_content_header_ids = defaultdict(dict)
     table_row_headers = defaultdict(lambda: defaultdict(dict))
@@ -135,7 +155,8 @@ def add_tags(pdf, document, pdf_version, page_streams):
 
         # Map page box content.
         elements = _build_box_tree(
-            page_box, structure_document, pdf, page_number, page_nums, annotations,
+            page_box, structure_document, pdf, page_number, page_nums, form_nums,
+            annotations,
             tags, table_header_ids, table_content_header_ids,
             table_row_headers,
             table_column_headers,
@@ -151,6 +172,14 @@ def add_tags(pdf, document, pdf_version, page_streams):
         # Flatten page-local nums into global mapping.
         sorted_refs = [ref for _, ref in sorted(page_nums.items())]
         content_mapping['Nums'][-1].extend(sorted_refs)
+
+    next_struct_parent = len(document.pages)
+    for stream, nums in form_nums.items():
+        stream.extra['StructParents'] = next_struct_parent
+        content_mapping['Nums'].append(next_struct_parent)
+        content_mapping['Nums'].append(pydyf.Array(
+            reference for _, reference in sorted(nums.items())))
+        next_struct_parent += 1
 
     # Resolve explicit references to headers first tagged on a later page.
     for table_id, pending_headers in pending_table_headers.items():
@@ -170,7 +199,7 @@ def add_tags(pdf, document, pdf_version, page_streams):
         structure_root['IDTree'] = id_tree.reference
 
     # Add annotations for links and widgets.
-    start = len(document.pages)
+    start = next_struct_parent
     for i, (reference, annotation) in enumerate(annotations, start=start):
         content_mapping['Nums'].append(i)
         content_mapping['Nums'].append(reference)
@@ -275,7 +304,7 @@ def _table_child_insert_index(
 
 
 def _build_box_tree(
-        box, parent, pdf, page_number, nums, annotations, tags,
+        box, parent, pdf, page_number, nums, form_nums, annotations, tags,
         table_header_ids, table_content_header_ids, table_row_headers,
         table_column_headers,
         table_column_group_headers,
@@ -333,7 +362,8 @@ def _build_box_tree(
         if isinstance(box, boxes.ParentBox) and not isinstance(box, boxes.LineBox):
             for child in box.children:
                 yield from _build_box_tree(
-                    child, parent, pdf, page_number, nums, annotations, tags,
+                    child, parent, pdf, page_number, nums, form_nums,
+                    annotations, tags,
                     table_header_ids, table_content_header_ids,
                     table_row_headers,
                     table_column_headers,
@@ -350,7 +380,8 @@ def _build_box_tree(
         # included in tree as Artifact, but that’s only allowed in PDF 2.0.
         for child in box.children:
             tuple(_build_box_tree(
-                child, parent, pdf, page_number, nums, annotations, tags,
+                child, parent, pdf, page_number, nums, form_nums,
+                annotations, tags,
                 table_header_ids, table_content_header_ids,
                 table_row_headers,
                 table_column_headers,
@@ -391,7 +422,8 @@ def _build_box_tree(
             })
             pdf.add_object(parent)
             children = _build_box_tree(
-                box, parent, pdf, page_number, nums, annotations, tags,
+                box, parent, pdf, page_number, nums, form_nums,
+                annotations, tags,
                 table_header_ids, table_content_header_ids,
                 table_row_headers,
                 table_column_headers,
@@ -521,22 +553,22 @@ def _build_box_tree(
             if isinstance(child, boxes.TextBox):
                 # Add marked element from the stream.
                 kid = tags.pop(child)
-                assert kid['mcid'] not in nums
                 if tag == 'Link':
                     # Associate MCID directly with link reference.
-                    element['K'].append(kid['mcid'])
-                    nums[kid['mcid']] = element.reference
+                    element['K'].append(_add_marked_content(
+                        element, kid, page_number, nums, form_nums, pdf))
                 else:
                     kid_element = pydyf.Dictionary({
                         'Type': '/StructElem',
                         'S': f'/{kid["tag"]}',
-                        'K': pydyf.Array([kid['mcid']]),
+                        'K': pydyf.Array(),
                         'Pg': pdf.page_references[page_number],
                         'P': element.reference,
                     })
                     pdf.add_object(kid_element)
+                    kid_element['K'].append(_add_marked_content(
+                        kid_element, kid, page_number, nums, form_nums, pdf))
                     element['K'].append(kid_element.reference)
-                    nums[kid['mcid']] = kid_element.reference
             else:
                 # Recursively build tree for child.
                 if child.element_tag in ('ul', 'ol') and element['S'] == '/LI':
@@ -552,7 +584,8 @@ def _build_box_tree(
                 # lists.
                 child_index = len(child_parent['K'])
                 child_elements = tuple(_build_box_tree(
-                    child, child_parent, pdf, page_number, nums, annotations, tags,
+                    child, child_parent, pdf, page_number, nums, form_nums,
+                    annotations, tags,
                     table_header_ids, table_content_header_ids,
                     table_row_headers,
                     table_column_headers,
@@ -578,9 +611,8 @@ def _build_box_tree(
     if isinstance(box, boxes.ReplacedBox):
         # Add replaced box.
         kid = tags.pop(box)
-        element['K'].append(kid['mcid'])
-        assert kid['mcid'] not in nums
-        nums[kid['mcid']] = element.reference
+        element['K'].append(_add_marked_content(
+            element, kid, page_number, nums, form_nums, pdf))
 
     # Link table cells to related headers.
     if tag == 'Table':
