@@ -2383,6 +2383,432 @@ def test_pdf_tags_paperlyft_table_fixture_contract(filename, table_count):
     assert actual_headers == expected_headers
 
 
+@assert_no_logs
+@pytest.mark.parametrize(('input_type', 'role'), [
+    ('checkbox', 'cb'), ('radio', 'rb')])
+@pytest.mark.parametrize('checked', [False, True])
+@pytest.mark.parametrize('style', [
+    '', 'display: inline-block', 'position: absolute; left: 40px',
+    'border-style: dashed', 'border-left: 0; border-right: 2px dotted red'])
+def test_pdf_tags_static_native_control(input_type, role, checked, style):
+    state = 'checked' if checked else ''
+    # Exercise native control appearance from the full UA stylesheet.
+    pdf = HTML(string=f'''
+      <html lang="en"><title>Static control</title><body>
+        <label for="choice">Choice</label>
+        <input id="choice" type="{input_type}" style="{style}" {state}>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    objects = _pdf_structure_objects(pdf)
+    controls = [
+        (reference, body) for reference, body in objects.items()
+        if re.search(rb'/S /Form(?:/|>>)', body)]
+    assert len(controls) == 1
+    reference, control = controls[0]
+    assert b'/O /PrintField' in control
+    assert f'/Role /{role}'.encode() in control
+    assert f'/checked /{"on" if checked else "off"}'.encode() in control
+    assert b'/Desc (Choice)' in control
+    # The control must own actual painted content, not an empty semantic node.
+    assert re.search(rb'/K \[\d+(?: |\])', control)
+    assert any(
+        b'/Nums' in body and reference in body for body in objects.values())
+    assert b'/Subtype /Widget' not in pdf
+    assert b'/AcroForm' not in pdf
+
+
+@assert_no_logs
+@pytest.mark.parametrize('content', [
+    '<label><strong>Choice</strong><input type="checkbox"></label>',
+    '<table><tr><td><label for="x"><em>Choice</em></label></td>'
+    '<td><input id="x" type="checkbox"></td></tr></table>',
+    '<div style="display:table"><span style="display:table-cell">'
+    '<label for="x">Choice</label></span><span style="display:table-cell">'
+    '<input id="x" type="checkbox"></span></div>',
+])
+def test_pdf_tags_static_native_control_labels(content):
+    pdf = HTML(string=f'<html lang="en"><title>Controls</title>{content}').write_pdf(
+        pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    assert len(re.findall(rb'/S /Form(?:/|>>)', pdf)) == 1
+    assert pdf.count(b'/Desc (Choice)') == 1
+
+
+@assert_no_logs
+@pytest.mark.parametrize('style', ['display:none', 'visibility:hidden'])
+def test_pdf_tags_static_native_control_hidden(style):
+    pdf = HTML(string=f'''
+      <html lang="en"><title>Hidden control</title><p>Visible text</p>
+      <input type="checkbox" style="{style}">
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    assert b'/O /PrintField' not in pdf
+
+
+@assert_no_logs
+@pytest.mark.parametrize('appearance', ['', '''
+    input {border:none;background:transparent}
+    input::before {content:"";border:2px solid black;opacity:.6}
+    input::after {content:none}'''])
+def test_pdf_tags_static_native_control_repeated_header(appearance):
+    rows = ''.join(f'<tr><td>Row {index}</td></tr>' for index in range(8))
+    pdf = HTML(string=f'''
+      <html lang="en"><title>Repeated control</title>
+      <style>@page {{ size: 200px 120px; margin: 5px }}
+      td, th {{ height: 35px }}{appearance}</style>
+      <table><thead><tr><th><label>Choice<input type="checkbox" checked>
+      </label></th></tr></thead><tbody>{rows}</tbody></table>
+    ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    assert len(re.findall(rb'/Type /Page\b', pdf)) > 1
+    assert len(re.findall(rb'/S /Form(?:/|>>)', pdf)) == 1
+    assert pdf.count(b'/O /PrintField') == 1
+    assert pdf.count(b'/Desc (Choice)') == 1
+
+
+@assert_no_logs
+def test_pdf_tags_static_native_control_keeps_generated_text():
+    pdf = HTML(string='''
+      <html lang="en"><title>Control content</title>
+      <style>input::before { content: "X"; } input::after { content: "Y"; }</style>
+      <p>Before</p><label>Choice<input type="checkbox" checked></label><p>After</p>
+    ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    objects = _pdf_structure_objects(pdf)
+    control = next(
+        body for body in objects.values() if re.search(rb'/S /Form(?:/|>>)', body))
+    children = re.findall(rb'\d+ 0 R', re.search(rb'/K \[([^]]*)\]', control)[1])
+    assert len(children) == 2
+    assert pdf.count(b'/MCID') >= 6
+    assert pdf.count(b'/O /PrintField') == 1
+
+
+@assert_no_logs
+@pytest.mark.parametrize('checked', [False, True])
+@pytest.mark.parametrize('style', ['', 'border:none;background:red',
+    'border:none;background:transparent;box-shadow:0 0 0 3px black;'
+    'outline:2px solid red',
+    'border:3px solid transparent;border-image:linear-gradient(red, blue) 1'])
+def test_pdf_tags_static_native_control_leaves_interactive_mode(checked, style):
+    state = 'checked' if checked else ''
+    pdf = HTML(string=f'''
+      <html lang="en"><title>Interactive control</title>
+      <form><label for="choice">Choice</label>
+      <input id="choice" name="choice" type="checkbox" style="{style}" {state}></form>
+    ''').write_pdf(pdf_tags=True, pdf_forms=True, uncompressed_pdf=True)
+    assert len(re.findall(rb'/S /Form(?:/|>>)', pdf)) == 1
+    assert b'/O /PrintField' not in pdf
+    assert b'/Subtype /Widget' in pdf
+    assert b'/TU (Choice)' in pdf
+    assert f'/V /{"on" if checked else "Off"}'.encode() in pdf
+
+
+@assert_no_logs
+@pytest.mark.parametrize('content', [
+    '<label for="other">Wrong<input id="choice" type="checkbox"></label>'
+    '<label for="choice">Right choice</label><input id="other">',
+    '<label for="choice"><strong>Right</strong> choice</label>'
+    '<div style="break-before:page"><input id="choice" type="checkbox"></div>',
+])
+def test_pdf_tags_static_native_control_label_association(content):
+    pdf = HTML(string=f'<html lang="en"><title>Labels</title>{content}').write_pdf(
+        pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    assert pdf.count(b'/Desc (Right choice)') == 1
+    assert b'/Desc (Wrong)' not in pdf
+
+
+@assert_no_logs
+def test_pdf_tags_static_native_control_running_copies():
+    pdf = HTML(string='''
+      <html lang="en"><title>Running controls</title><style>
+      @page { @top-center { content:element(control) }
+              @bottom-center { content:element(control) } }
+      .running { position:running(control) }
+      </style><div class="running"><label>Choice<input type="checkbox"></label></div>
+      <p>First</p><p style="break-before:page">Second</p>
+    ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    assert len(re.findall(rb'/Type /Page\b', pdf)) == 2
+
+
+@assert_no_logs
+@pytest.mark.parametrize(('content', 'name'), [
+    ('<label for="x">First</label><label for="x"><b>Second</b></label>'
+     '<input id="x" type="checkbox">', 'First Second'),
+    ('<label>Wrong<input type="text"><input type="checkbox" '
+     'title="Right"></label>', 'Right'),
+    ('<label for="missing">Wrong<input type="checkbox" '
+     'title="Right"></label>', 'Right'),
+    ('<label for="x">Visible</label><input id="x" type="checkbox" '
+     'aria-label="Spoken">', 'Spoken'),
+    ('<span id="a">First <b>nested</b></span><span id="b">Second</span>'
+     '<input type="checkbox" aria-label="Wrong" aria-labelledby="b a">',
+     'Second First nested'),
+    ('<input type="checkbox" aria-labelledby="missing" aria-label="Right">',
+     'Right'),
+    ('<span id="a" hidden>Hidden name</span>'
+     '<input type="checkbox" aria-labelledby="a">', 'Hidden name'),
+    ('<label><img alt="Image choice"><input type="checkbox"></label>',
+     'Image choice'),
+    ('<span id="a" aria-label="Spoken reference">Wrong</span>'
+     '<input type="checkbox" aria-labelledby="a">', 'Spoken reference'),
+    ('<style>.hidden{display:none}</style><label>Right'
+     '<span class="hidden">Wrong</span><span hidden>Wrong</span>'
+     '<span aria-hidden="true">Wrong</span><input type="checkbox"></label>',
+     'Right'),
+    ('<label>First<span style="display:block">Second</span>Third'
+     '<input type="checkbox"></label>', 'First Second Third'),
+    ('<label for="x"><span style="visibility:hidden">Excluded'
+     '<span style="visibility:visible">Visible name</span></span></label>'
+     '<input id="x" type="checkbox">', 'Visible name'),
+    ('<label for="x" hidden>Hidden label</label>'
+     '<input id="x" type="checkbox">', 'Hidden label'),
+])
+def test_pdf_tags_static_native_control_accessible_name(content, name):
+    pdf = HTML(string=f'<html lang="en"><title>Names</title>{content}').write_pdf(
+        pdf_tags=True, uncompressed_pdf=True)
+    assert pdf.count(f'/Desc ({name})'.encode()) == 1
+
+
+@assert_no_logs
+@pytest.mark.parametrize('content', [
+    '<input type="checkbox" aria-hidden="true">',
+    '<div aria-hidden="true"><input type="radio" checked></div>',
+    '<div aria-hidden="true"><input type="checkbox" aria-hidden="false"></div>',
+])
+def test_pdf_tags_static_native_control_aria_hidden(content):
+    pdf = HTML(string=f'<html lang="en"><title>Hidden semantics</title>'
+               f'<p>Visible text</p>{content}').write_pdf(
+                   pdf_tags=True, uncompressed_pdf=True)
+    assert b'/O /PrintField' not in pdf
+    assert not re.search(rb'/S /Form(?:/|>>)', pdf)
+
+
+@assert_no_logs
+@pytest.mark.parametrize(('style', 'painted'), [
+    ('border:none;background:transparent', False),
+    ('border-color:transparent;background:transparent', False),
+    ('border:none;background:red', True),
+    ('border:none;background:linear-gradient(red, blue)', True),
+    ('border:none;background:linear-gradient(red, blue) no-repeat', True),
+    ('border:none;background:url(pattern.png)', True),
+    ('border:none;background:url(pattern.png) no-repeat', True),
+    ('border:none;background:linear-gradient(red, blue);background-size:0 0', False),
+    ('border:3px solid transparent;border-image:linear-gradient(red, blue) 1', True),
+    ('border:3px solid transparent;border-image:linear-gradient(red, blue) 1;'
+     'border-image-width:0;background:transparent', False),
+    ('background:red;border:2px solid blue', True),
+])
+@pytest.mark.parametrize('layout', [
+    '', 'display:block', 'position:absolute', 'display:table-cell'])
+@pytest.mark.parametrize('input_type', ['checkbox', 'radio'])
+def test_pdf_tags_static_native_control_custom_paint(
+        style, painted, layout, input_type):
+    html = HTML(base_url=resource_path(''), string=f'''
+      <html lang="en"><title>Custom control</title>
+      <label>Choice<input type="{input_type}" style="{style};{layout}"></label>''')
+    assert html.write_pdf().startswith(b'%PDF-')
+    pdf = html.write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    assert pdf.count(b'/O /PrintField') == int(painted)
+    appearances = re.findall(rb'/Form\s+<</MCID (\d+)>>\s+BDC(.*?)EMC', pdf, re.S)
+    assert len(appearances) == int(painted)
+    if painted:
+        assert b'/Artifact' not in appearances[0][1]
+        assert re.search(rb'\b(?:f\*?|S|Do|sh)\b', appearances[0][1])
+
+
+@assert_no_logs
+@pytest.mark.parametrize(('style', 'extra'), [
+    ('background:red;border:2px solid blue;box-shadow:inset 2px 2px 2px black', ''),
+    ('background:red;border:2px solid blue;opacity:.6;'
+     'box-shadow:inset 2px 2px 2px black,3px 3px 2px black', ''),
+    ('display:block;width:180px;height:50px;column-count:2;'
+     'column-rule:2px solid green;background:red;border:2px solid blue',
+     'input::before {content:"One two three four five six seven eight nine ten"}'),
+])
+@pytest.mark.parametrize('input_type', ['checkbox', 'radio'])
+@pytest.mark.parametrize('checked', [False, True])
+def test_pdf_tags_static_native_control_decorations(style, extra, input_type, checked):
+    state = 'checked' if checked else ''
+    pdf = HTML(string=f'''<html lang="en"><title>Control decorations</title>
+      <style>{extra}</style><div style="opacity:.7"><label>Choice
+      <input type="{input_type}" {state} style="{style}"></label></div>
+    ''').write_pdf(pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    assert pdf.count(b'/O /PrintField') == 1
+    appearances = list(re.finditer(
+        rb'/Form\s+<</MCID \d+>>\s+BDC(.*?)EMC', pdf, re.S))
+    assert len(appearances) == 1
+    appearance, = appearances
+    # PDF/UA-1 7.1 forbids artifact/tagged-content nesting. A real painted
+    # component owns the Form; subsequent decoration must stay outside it.
+    assert b'/Artifact' not in appearance[1]
+    assert re.search(rb'\bf\b', appearance[1])
+    assert re.search(rb'/Artifact\s+BMC.*?\bf\*?\b.*?EMC',
+                     pdf[appearance.end():], re.S)
+    objects = _pdf_structure_objects(pdf)
+    reference, control = next(
+        (reference, body) for reference, body in objects.items()
+        if re.search(rb'/S /Form(?:/|>>)', body))
+    stream_reference = re.search(rb'/Stm (\d+ 0 R)', control)[1]
+    assert b'/StructParents ' in objects[stream_reference]
+    assert any(b'/Nums' in body and reference in body for body in objects.values())
+
+
+@assert_no_logs
+@pytest.mark.parametrize(('style', 'painted'), [
+    ('box-shadow:0 0 0 3px black', True),
+    ('box-shadow:inset 0 0 0 3px black', True),
+    ('outline:3px solid black;outline-offset:2px', True),
+    ('box-shadow:0 0 0 3px transparent', False),
+    ('box-shadow:0 0 0 0 black', False),
+    ('box-shadow:inset 0 0 0 0 black', False),
+    ('outline:0 solid black', False),
+])
+@pytest.mark.parametrize('input_type', ['checkbox', 'radio'])
+@pytest.mark.parametrize('checked', [False, True])
+def test_pdf_tags_static_native_control_shadow_outline(
+        style, painted, input_type, checked):
+    pdf = HTML(string=f'''<html lang="en"><title>Control appearance</title>
+      <style>input::before,input::after {{content:none}}</style>
+      <div style="opacity:.7"><input type="{input_type}" aria-label="Choice"
+      {'checked' if checked else ''} style="border:none;background:transparent;
+      width:24px;height:24px;opacity:.6;{style}"></div>
+    ''').write_pdf(pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    assert pdf.count(b'/O /PrintField') == int(painted)
+    assert len(re.findall(rb'/Form\s+<</MCID \d+>>\s+BDC', pdf)) == int(painted)
+    if painted:
+        assert b'/Desc (Choice)' in pdf
+        assert f'/checked /{"on" if checked else "off"}'.encode() in pdf
+        appearance = re.search(rb'/Form\s+<</MCID \d+>>\s+BDC(.*?)EMC', pdf, re.S)
+        assert b'/Artifact' not in appearance[1]
+        assert re.search(rb'\b(?:f|f\*|S|sh)\b', appearance[1])
+
+
+@assert_no_logs
+@pytest.mark.parametrize(('content', 'marker'), [
+    ('"X"', 'Span'), ('url(pattern.png)', 'Figure')])
+@pytest.mark.parametrize('input_type', ['checkbox', 'radio'])
+@pytest.mark.parametrize('checked', [False, True])
+def test_pdf_tags_static_native_control_tagged_descendant(
+        content, marker, input_type, checked):
+    pdf = HTML(base_url=resource_path(''), string=f'''
+      <html lang="en"><title>Descendant control</title><style>
+      input {{border:none;background:transparent;width:24px;height:24px}}
+      input::before {{content:{content};background:transparent;color:black}}
+      input::after {{content:none}}
+      </style><div style="opacity:.7"><input type="{input_type}" aria-label="Choice"
+      {'checked' if checked else ''} style="opacity:.6"></div>
+    ''').write_pdf(pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    objects = _pdf_structure_objects(pdf)
+    controls = [
+        body for body in objects.values() if re.search(rb'/S /Form(?:/|>>)', body)]
+    assert len(controls) == 1
+    control, = controls
+    assert b'/O /PrintField' in control
+    assert b'/Desc (Choice)' in control
+    assert f'/checked /{"on" if checked else "off"}'.encode() in control
+    # The existing child owns its MCID. The native parent adds structure and
+    # attributes only, never a second or empty marked-content sequence.
+    assert not re.search(rb'/Form\s+<</MCID', pdf)
+    assert len(re.findall(rb'/MCID \d+', pdf)) == 2  # BDC and its MCR.
+    assert re.search(fr'/{marker}\s+<</MCID \d+>>\s+BDC'.encode(), pdf)
+    children = re.search(rb'/K \[([^]]*)\]', control)[1]
+    assert re.fullmatch(rb'(?:\d+ 0 R\s*)+', children)
+
+
+@assert_no_logs
+@pytest.mark.parametrize('style', ['visibility:hidden', 'font-size:0', ''])
+def test_pdf_tags_static_native_control_empty_descendant(style):
+    content = '"X"' if style else '""'
+    pdf = HTML(string=f'''<html lang="en"><title>Empty descendant</title><style>
+      input {{border:none;background:transparent}}
+      input::before {{content:{content};{style}}} input::after {{content:none}}
+      </style><p>Text</p><input type="checkbox" aria-label="Choice">
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    assert b'/O /PrintField' not in pdf
+
+
+@assert_no_logs
+@pytest.mark.parametrize('pseudo', ['before', 'after', 'native'])
+@pytest.mark.parametrize('input_type', ['checkbox', 'radio'])
+@pytest.mark.parametrize('checked', [False, True])
+@pytest.mark.parametrize('opacity', ['', 'opacity:.6'])
+def test_pdf_tags_static_native_control_pseudo_paint(
+        pseudo, input_type, checked, opacity):
+    extra = '' if pseudo == 'native' else f'''
+      input::before,input::after {{content:none}}
+      input::{pseudo} {{content:"";display:block;width:20px;height:20px;
+        border:2px solid black;opacity:.8}}'''
+    pdf = HTML(string=f'''<html lang="en"><title>Pseudo control</title><style>
+      input {{border:none;background:transparent;width:24px;height:24px}}
+      {extra}</style><div style="opacity:.7"><input type="{input_type}"
+      aria-label="Choice" {'checked' if checked else ''} style="{opacity}"></div>
+    ''').write_pdf(pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    painted = pseudo != 'native' or checked
+    assert pdf.count(b'/O /PrintField') == int(painted)
+    appearances = re.findall(rb'/Form\s+<</MCID \d+>>\s+BDC(.*?)EMC', pdf, re.S)
+    assert len(appearances) == int(painted)
+    if painted:
+        assert b'/Desc (Choice)' in pdf
+        assert f'/checked /{"on" if checked else "off"}'.encode() in pdf
+        assert b'/Artifact' not in appearances[0]
+        assert re.search(rb'\bf\b', appearances[0])
+
+
+@assert_no_logs
+@pytest.mark.parametrize('extra', [
+    'input {visibility:hidden}', 'input::before {visibility:hidden}',
+    'input::before {border:none;background:transparent}',
+])
+def test_pdf_tags_static_native_control_pseudo_no_paint(extra):
+    pdf = HTML(string=f'''<html lang="en"><title>No pseudo paint</title><style>
+      input {{border:none;background:transparent}}
+      input::before {{content:"";display:block;width:20px;height:20px;
+        border:2px solid black}} input::after {{content:none}} {extra}
+      </style><p>Text</p><input type="checkbox" aria-label="Choice">
+    ''').write_pdf(pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    assert b'/O /PrintField' not in pdf
+
+
+@assert_no_logs
+@pytest.mark.parametrize('appearance', [
+    'border:none;background:transparent',
+    'border:2px solid blue;background:red;box-shadow:inset 0 0 0 3px black',
+])
+def test_pdf_tags_static_native_control_pseudo_layout_owners(appearance):
+    pdf = HTML(string=f'''<html lang="en"><title>Distinct controls</title><style>
+      input {{{appearance};outline:2px solid green}}
+      input::before,input::after {{content:"X";display:block;
+        width:20px;height:20px;border:2px solid black;opacity:.6}}
+      </style><div style="opacity:.7"><input type="checkbox" aria-label="First">
+      <input type="checkbox" checked aria-label="Second"></div>
+    ''').write_pdf(pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    assert pdf.count(b'/O /PrintField') == 2
+    assert pdf.count(b'/Desc (First)') == 1
+    assert pdf.count(b'/Desc (Second)') == 1
+    assert len(re.findall(rb'/Form\s+<</MCID \d+>>\s+BDC', pdf)) == 2
+    assert len(re.findall(rb'/Span\s+<</MCID \d+>>\s+BDC', pdf)) == 4
+
+
+@assert_no_logs
+@pytest.mark.parametrize('style', ['opacity:.5', 'opacity:.5;position:absolute'])
+@pytest.mark.parametrize('appearance', ['', 'border:none;background:red',
+    'border:3px solid transparent;border-image:linear-gradient(red, blue) 1'])
+def test_pdf_tags_static_native_control_nested_opacity(style, appearance):
+    pdf = HTML(string=f'''
+      <html lang="en"><title>Opacity control</title>
+      <div style="opacity:.5"><label>Choice<input type="checkbox" checked
+      style="{style};{appearance}"></label></div>
+    ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    objects = _pdf_structure_objects(pdf)
+    reference, control = next(
+        (reference, body) for reference, body in objects.items()
+        if re.search(rb'/S /Form(?:/|>>)', body))
+    stream = re.search(rb'/Stm (\d+ 0 R)', control)
+    assert stream
+    group = objects[stream[1]]
+    assert b'/Subtype /Form' in group
+    assert b'/StructParents ' in group
+    assert b'/MCID' in group
+    assert len(re.findall(rb'/Form\s+<</MCID \d+>>\s+BDC', group)) == 1
+    assert any(b'/Nums' in body and reference in body for body in objects.values())
+
+
 @pytest.mark.parametrize(('html', 'fields'), [
     ('<input>', ['/Tx', '/V ()']),
     ('<input value="">', ['/Tx', '/V ()']),

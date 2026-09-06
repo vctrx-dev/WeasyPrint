@@ -1,9 +1,12 @@
 """Take an "after layout" box tree and draw it onto a pydyf stream."""
 
 import operator
+from contextlib import contextmanager, nullcontext
+from functools import partial
 from math import floor, pi
 from xml.etree import ElementTree
 
+from ..css import AnonymousStyle
 from ..css.properties import Dimension
 from ..formatting_structure import boxes
 from ..images import LinearGradient, RadialGradient, SVGImage
@@ -116,8 +119,7 @@ def draw_stacking_context(stream, stacking_context):
                             boxes.GridContainerBox, boxes.ReplacedBox)):
             set_mask_border(stream, box)
             # The canvas background was removed by layout_backgrounds.
-            draw_background(stream, box.background)
-            draw_border(stream, box)
+            draw_box_background_and_border(stream, box)
 
         with stream.stacked():
             # Dont clip the page box, see #35.
@@ -143,8 +145,7 @@ def draw_stacking_context(stream, stacking_context):
                 if isinstance(block, boxes.TableBox):
                     draw_table(stream, block)
                 else:
-                    draw_background(stream, block.background)
-                    draw_border(stream, block)
+                    draw_box_background_and_border(stream, block)
 
             # Point 5.
             for child_context in stacking_context.float_contexts:
@@ -167,7 +168,7 @@ def draw_stacking_context(stream, stacking_context):
                 draw_stacking_context(stream, child_context)
 
         # Point 10.
-        draw_outline(stream, box)
+        draw_outline(stream, box, partial(_control_appearance, stream))
 
         if box.style['opacity'] < 1:
             group_id = stream.id
@@ -273,8 +274,9 @@ def _draw_box_shadow(stream, box, style, tx, ty, blur, spread, color, inset):
                 gradient.draw(stream, width, height, style)
 
 
-def draw_box_shadows(stream, boxes, style, inset):
+def draw_box_shadows(stream, boxes, style, inset, artifact=None):
     """Draw box shadows."""
+    artifact = artifact or stream.artifact
     for x, y, blur, spread, color, shadow_inset in reversed(style['box_shadow']):
         # Only draw inset or outset shadows.
         if inset != shadow_inset:
@@ -285,11 +287,65 @@ def draw_box_shadows(stream, boxes, style, inset):
         color = style['color'] if color == 'currentcolor' else color
 
         for box in boxes:
-            with stream.artifact(), stream.stacked():
+            shadow_box = _spread_box(box, 0 if inset else spread + blur, tx, ty)
+            visible = (color.alpha and any((tx, ty, blur, spread)) and
+                       shadow_box[2] > 0 and shadow_box[3] > 0)
+            marker = artifact if visible else stream.artifact
+            with marker(), stream.stacked():
                 _draw_box_shadow(stream, box, style, tx, ty, blur, spread, color, inset)
 
 
-def draw_background(stream, background, clip_box=True, bleed=None, marks=()):
+def _control_appearance(stream, box):
+    """Select a local paint scope without claiming an owner until paint exists."""
+    owner = getattr(box, 'static_control_owner', box)
+    static_control = (
+        stream._tags is not None and owner.element_tag == 'input' and
+        owner not in stream._tags and
+        not owner.is_input() and box.style['visibility'] == 'visible' and
+        owner.style['visibility'] == 'visible' and
+        getattr(owner, 'static_control_name', None) is not None and
+        not isinstance(owner.style, AnonymousStyle) and
+        not owner.is_repeated_table_header and
+        owner.element.get('type', '').lower() in ('checkbox', 'radio'))
+    if not static_control:
+        return stream.artifact
+
+    @contextmanager
+    def appearance():
+        if owner in stream._tags:
+            with stream.artifact():
+                yield
+            return
+        start = len(stream.stream)
+        yield
+        # Clipping and state changes alone are not an appearance. Wait for
+        # an emitted paint operator before allocating the MCID in the current
+        # (possibly opacity) stream. Only this first painted component owns
+        # the Form; close it before another paint component or child.
+        paint_operators = (b'f', b'f*', b'S', b's', b'B', b'B*', b'b', b'b*',
+                           b'Do', b'sh')
+        if any(command.split()[-1:] and command.split()[-1] in paint_operators
+               for command in stream.stream[start:]):
+            end = len(stream.stream)
+            with stream.marked(owner, 'Form'):
+                marker = stream.stream[end:]
+                del stream.stream[end:]
+                stream.stream[start:start] = marker
+    return appearance
+
+
+def draw_box_background_and_border(stream, box, *, background=True, border=True):
+    """Give a static native control's emitted appearance one content owner."""
+    appearance = _control_appearance(stream, box)
+
+    if background:
+        draw_background(stream, box.background, artifact=appearance)
+    if border:
+        draw_border(stream, box, artifact=appearance)
+
+
+def draw_background(stream, background, clip_box=True, bleed=None, marks=(),
+                    artifact=None):
     """Draw the background color and image to a ``pdf.stream.Stream``.
 
     If ``clip_box`` is set to ``False``, the background is not clipped to the
@@ -298,11 +354,12 @@ def draw_background(stream, background, clip_box=True, bleed=None, marks=()):
     """
     if background is None or not background.layers:
         return
+    artifact = artifact or stream.artifact
 
     clipped_boxes = background.layers[-1].clipped_boxes
     painting_area = background.layers[-1].painting_area
 
-    draw_box_shadows(stream, clipped_boxes, background.style, inset=False)
+    draw_box_shadows(stream, clipped_boxes, background.style, False, artifact)
 
     with stream.stacked():
         if clip_box:
@@ -313,7 +370,7 @@ def draw_background(stream, background, clip_box=True, bleed=None, marks=()):
 
         # Draw background color.
         if background.color.alpha > 0:
-            with stream.artifact(), stream.stacked():
+            with artifact(), stream.stacked():
                 stream.set_color(background.color)
                 stream.rectangle(*painting_area)
                 stream.clip()
@@ -389,12 +446,13 @@ def draw_background(stream, background, clip_box=True, bleed=None, marks=()):
             background.layers.insert(0, layer)
         # Paint in reversed order: first layer is "closest" to the viewer.
         for layer in reversed(background.layers):
-            draw_background_image(stream, layer, background.style)
+            draw_background_image(stream, layer, background.style, artifact)
 
-    draw_box_shadows(stream, clipped_boxes, background.style, inset=True)
+    draw_box_shadows(stream, clipped_boxes, background.style, True, artifact)
 
 
-def draw_background_image(stream, layer, style):
+def draw_background_image(stream, layer, style, artifact=None):
+    artifact = artifact or stream.artifact
     if layer.image is None or 0 in layer.size:
         return
 
@@ -406,7 +464,7 @@ def draw_background_image(stream, layer, style):
     image_width, image_height = layer.size
 
     if repeat_x == 'no-repeat' and repeat_y == 'no-repeat':
-        with stream.artifact():
+        with artifact():
             # We don't use a pattern when we don't need to because some viewers
             # (e.g., Preview on Mac) introduce unnecessary pixelation when vector
             # images are used in patterns.
@@ -466,9 +524,9 @@ def draw_background_image(stream, layer, style):
         0, 0, image_width, image_height, repeat_width, repeat_height, matrix)
     group = pattern.add_group(0, 0, repeat_width, repeat_height)
 
-    with stream.artifact(), stream.stacked():
+    with artifact(), stream.stacked():
         layer.image.draw(group, image_width, image_height, style)
-        with pattern.artifact():
+        with pattern.artifact() if artifact == stream.artifact else nullcontext():
             pattern.draw_x_object(group.id)
         stream.set_color_space('Pattern')
         stream.set_color_special(pattern.id)
@@ -497,7 +555,10 @@ def draw_table(stream, table):
                     cell.style['empty_cells'] == 'show' or
                     not cell.empty)
                 if draw_cell_background:
-                    draw_background(stream, cell.background)
+                    # Table layers must keep their paint order. The first
+                    # emitted component owns a native cell control's MCID;
+                    # later decoration does not create a second owner.
+                    draw_box_background_and_border(stream, cell, border=False)
 
     # Draw borders.
     if table.style['border_collapse'] == 'collapse':
@@ -507,7 +568,7 @@ def draw_table(stream, table):
         for row in row_group.children:
             for cell in row.children:
                 if cell.style['empty_cells'] == 'show' or not cell.empty:
-                    draw_border(stream, cell)
+                    draw_box_background_and_border(stream, cell, background=False)
 
 
 def draw_collapsed_borders(stream, table):
@@ -654,8 +715,7 @@ def draw_inline_level(stream, page, box, offset_x=0, text_overflow='clip',
         draw_stacking_context(stream, stacking_context)
     else:
         set_mask_border(stream, box)
-        draw_background(stream, box.background)
-        draw_border(stream, box)
+        draw_box_background_and_border(stream, box)
         if isinstance(box, (boxes.InlineBox, boxes.LineBox)):
             if isinstance(box, boxes.LineBox):
                 text_overflow = box.text_overflow

@@ -10,6 +10,7 @@ from ..layout.table import collapse_table_borders
 from ..logger import LOGGER
 from ..text.constants import get_lang_quotes
 from . import boxes
+from .names import get_static_control_names
 
 # Maps values of the ``display`` CSS property to box types.
 BOX_TYPE_FROM_DISPLAY = {
@@ -80,6 +81,12 @@ def build_formatting_structure(element_tree, style_for, get_image_from_uri,
     # If this is changed, maybe update weasy.layout.page.make_margin_boxes()
     box = create_anonymous_boxes(box)
     box = set_viewport_overflow(box)
+    # Names need the complete DOM and computed styles, not page-local text.
+    # The name on each control survives pagination and Document.copy().
+    control_names = get_static_control_names(element_tree, style_for)
+    for descendant in box.descendants():
+        if descendant.element_tag == 'input':
+            descendant.static_control_name = control_names.get(descendant.element)
     return box
 
 

@@ -53,12 +53,14 @@ def draw_column_rules(stream, box):
             draw_rect_border(stream, border_box, border_widths, rule_style, color)
 
 
-def draw_border(stream, box):
+def draw_border(stream, box, artifact=None):
     """Draw the box borders and column rules to a ``pdf.stream.Stream``."""
 
     # The box is hidden, easy.
     if box.style['visibility'] != 'visible':
         return
+
+    artifact = artifact or stream.artifact
 
     # Draw column rules.
     columns = (
@@ -71,7 +73,7 @@ def draw_border(stream, box):
 
     # If there's a border image, that takes precedence.
     if box.style['border_image_source'][0] != 'none' and box.border_image is not None:
-        with stream.artifact():
+        with artifact():
             draw_border_image(
                 box, stream, box.border_image, box.style['border_image_slice'],
                 box.style['border_image_repeat'], box.style['border_image_outset'],
@@ -94,7 +96,7 @@ def draw_border(stream, box):
     four_sides = 0 not in widths  # no 0-width border, to avoid PDF artifacts
     if simple_style and single_color and four_sides:
         # Simple case, we only draw rounded rectangles.
-        with stream.artifact(), stream.stacked():
+        with artifact(), stream.stacked():
             draw_rounded_border(stream, box, styles[0], colors[0])
         return
 
@@ -105,7 +107,7 @@ def draw_border(stream, box):
     dotted_dashed = set(styles) in ({'dotted'}, {'dashed'})
     one_width = len(set(widths)) == 1
     if dotted_dashed and single_color and four_sides and one_width and no_radii:
-        with stream.artifact(), stream.stacked():
+        with artifact(), stream.stacked():
             draw_dotted_dashed_border(stream, box, styles[0], widths[0], colors[0])
         return
 
@@ -115,9 +117,9 @@ def draw_border(stream, box):
     values = tuple(zip(SIDES, widths, colors, styles))
     for index in (2, 3, 1, 0):
         side, width, color, style = values[index]
-        if width == 0 or not color:
+        if width == 0 or not color.alpha:
             continue
-        with stream.artifact(), stream.stacked():
+        with artifact(), stream.stacked():
             clip_border_segment(
                 stream, style, width, side, box.rounded_border_box()[:4],
                 widths, box.rounded_border_box()[4:])
@@ -723,19 +725,20 @@ def draw_line(stream, x1, y1, x2, y2, thickness, style, color, offset=0):
         stream.stroke()
 
 
-def draw_outline(stream, box):
+def draw_outline(stream, box, artifact=None):
     width = box.style['outline_width']
     offset = box.style['outline_offset']
     color = get_color(box.style, 'outline_color')
     style = box.style['outline_style']
     if box.style['visibility'] == 'visible' and width and color.alpha:
+        marker = artifact(box) if artifact else stream.artifact
         outline_box = (
             box.border_box_x() - width - offset,
             box.border_box_y() - width - offset,
             box.border_width() + 2 * width + 2 * offset,
             box.border_height() + 2 * width + 2 * offset)
         for side in SIDES:
-            with stream.artifact(), stream.stacked():
+            with marker(), stream.stacked():
                 clip_border_segment(stream, style, width, side, outline_box)
                 draw_rect_border(
                     stream, outline_box, 4 * (width,), style,
@@ -743,7 +746,7 @@ def draw_outline(stream, box):
 
     for child in box.children:
         if isinstance(child, boxes.Box):
-            draw_outline(stream, child)
+            draw_outline(stream, child, artifact)
 
 
 def rounded_box(stream, radii):

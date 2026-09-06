@@ -4,6 +4,7 @@ from collections import defaultdict
 
 import pydyf
 
+from ..css import AnonymousStyle
 from ..formatting_structure import boxes
 from ..html import SPACE_SEPARATED_TOKENS_RE
 from ..layout.absolute import AbsolutePlaceholder
@@ -303,6 +304,17 @@ def _table_child_insert_index(
     return len(parent['K'])
 
 
+def _has_tagged_descendant(box, tags):
+    """Require existing text/image content, not a declared or hidden pseudo box."""
+    return any(
+        child is not box and child in tags and
+        child.style['visibility'] == 'visible' and
+        child.width > 0 and child.height > 0 and (
+            (isinstance(child, boxes.TextBox) and child.text.strip()) or
+            (isinstance(child, boxes.ReplacedBox) and not child.is_decorative_image))
+        for child in box.descendants(placeholders=True))
+
+
 def _build_box_tree(
         box, parent, pdf, page_number, nums, form_nums, annotations, tags,
         table_header_ids, table_content_header_ids, table_row_headers,
@@ -346,6 +358,16 @@ def _build_box_tree(
 
     element_tag = None if box.element is None else box.element_tag
     tag = _get_pdf_tag(element_tag)
+    control_content = tags.get(box, {}).get('tag') == 'Form'
+    static_control = control_content or (
+        element_tag == 'input' and not box.is_input() and
+        not isinstance(box.style, AnonymousStyle) and
+        box.style['visibility'] == 'visible' and
+        getattr(box, 'static_control_name', None) is not None and
+        box.element.get('type', '').lower() in ('checkbox', 'radio') and
+        _has_tagged_descendant(box, tags))
+    if static_control:
+        tag = 'Form'
     if element_tag == 'figure':
         figure_context = id(box.element)
     if tag == 'Table':
@@ -531,6 +553,18 @@ def _build_box_tree(
         # TODO: don’t use the box to store this.
         box.mark = element
         box.mark_content_length = len(element['K'])
+
+    if static_control:
+        element['A'] = pydyf.Dictionary({
+            'O': '/PrintField',
+            'Role': '/cb' if box.element.get('type').lower() == 'checkbox' else '/rb',
+            'checked': '/on' if 'checked' in box.element.attrib else '/off',
+        })
+        if box.static_control_name:
+            element['A']['Desc'] = pydyf.String(box.static_control_name)
+        if control_content:
+            element['K'].append(_add_marked_content(
+                element, tags.pop(box), page_number, nums, form_nums, pdf))
 
     # Include link annotations.
     for annotation in _get_link_annotations(box, tags):

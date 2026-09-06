@@ -123,10 +123,23 @@ def _dispatch_children(box, page, child_contexts, blocks, floats,
     if not isinstance(box, boxes.ParentBox):
         return box
 
+    if box.element_tag == 'input':
+        # Associate generated appearance with this laid-out control before
+        # dispatch separates positioned/opacity descendants from their parent.
+        for descendant in box.descendants():
+            if (descendant.element is box.element and
+                    descendant.element_tag in ('input::before', 'input::after')):
+                descendant.static_control_owner = box
+
     new_children = []
     for child in box.children:
         result = _dispatch(
             child, page, child_contexts, blocks, floats, blocks_and_cells)
         if result is not None:
             new_children.append(result)
-    return box.copy_with_children(new_children)
+    copy = box.copy_with_children(new_children)
+    if box.element_tag == 'input':
+        # Paint copies must refer to this layout instance, not to the HTML
+        # element shared by independent running and paginated copies.
+        copy.static_control_owner = box
+    return copy
