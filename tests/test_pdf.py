@@ -1004,6 +1004,120 @@ def test_pdf_tags_nested_lists_order():
         assert sorted(numbers) == numbers
 
 
+def _document_structure_roles(pdf):
+    """Return every structure role below the document element, in tree order."""
+    objects = _pdf_structure_objects(pdf)
+    document = next(
+        reference for reference, body in objects.items()
+        if re.search(rb'/S /Document(?:/|>>)', body))
+    return list(_structure_descendant_roles(objects, document))
+
+
+def _semantic_structure_roles(pdf, roles):
+    """Return the tagged order of the given roles only."""
+    return [role for role in _document_structure_roles(pdf) if role in roles]
+
+
+@pytest.mark.parametrize('flow_first', [True, False])
+@assert_no_logs
+def test_pdf_tags_flex_out_of_flow_child_keeps_source_order(flow_first):
+    # Out-of-flow flex children used to be tagged before every flex item.
+    heading = '<h1>title</h1>'
+    badge = '<p style="position:absolute;top:0;right:0">badge</p>'
+    children = heading + badge if flow_first else badge + heading
+    pdf = FakeHTML(string=f'''
+      <html lang="en"><body>
+        <div style="display:flex;position:relative">{children}</div>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    expected = [b'H1', b'P'] if flow_first else [b'P', b'H1']
+    assert _semantic_structure_roles(pdf, (b'H1', b'P')) == expected
+
+
+@pytest.mark.parametrize('display', ['flex', 'grid'])
+@assert_no_logs
+def test_pdf_tags_visual_item_order_keeps_source_order(display):
+    # The order property is a visual reordering: reading order is source order.
+    pdf = FakeHTML(string=f'''
+      <html lang="en"><body>
+        <div style="display:{display}">
+          <h1 style="order:2">title</h1>
+          <p style="order:1">text</p>
+        </div>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    assert _semantic_structure_roles(pdf, (b'H1', b'P')) == [b'H1', b'P']
+
+
+@assert_no_logs
+def test_pdf_tags_grid_placement_keeps_source_order():
+    # Grid placement moves items between rows without moving reading order.
+    pdf = FakeHTML(string='''
+      <html lang="en"><body>
+        <div style="display:grid;grid-template-rows:auto auto">
+          <h1 style="grid-row:2">title</h1>
+          <p style="grid-row:1">text</p>
+        </div>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    assert _semantic_structure_roles(pdf, (b'H1', b'P')) == [b'H1', b'P']
+
+
+@assert_no_logs
+def test_pdf_tags_broken_out_of_flow_keeps_source_order():
+    # Content resumed out of flow used to be tagged in front of the page it
+    # resumes on. It cannot be nested back inside its source parent, but it
+    # keeps its source position among the boxes it is a sibling of.
+    pdf = FakeHTML(string='''
+      <html lang="en"><head><style>
+        @page { size: 60px 40px; margin: 0 }
+        body, blockquote { margin: 0 }
+        h1, p, div { font-size: 8px; line-height: 10px; margin: 0 }
+        blockquote { position: absolute; top: 0; left: 30px; width: 25px }
+      </style></head><body>
+        <h1>t</h1>
+        <blockquote><p>a1</p><p>a2</p><p>a3</p><p>a4</p><p>a5</p></blockquote>
+        <div>b1</div><div>b2</div><div>b3</div>
+        <div>b4</div><div>b5</div><div>b6</div>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    assert _semantic_structure_roles(pdf, (b'H1', b'BlockQuote', b'Div')) == [
+        b'H1', b'BlockQuote', b'Div', b'Div', b'Div',
+        b'Div', b'Div', b'Div', b'BlockQuote']
+
+
+def _marked_content_order(pdf):
+    """Return the tag names of the page's marked content, in painting order."""
+    return re.findall(rb'/(\w+)\s*<</MCID \d+>>\s*BDC', pdf)
+
+
+@assert_no_logs
+@pytest.mark.parametrize('display', ['block', 'inline'])
+def test_pdf_image_marked_content_follows_source_order(display):
+    # The UA stylesheet clips every image, which used to make each one its own
+    # stacking context. Painting one last put its marked content after all the
+    # text on the page, and that is the order reading-order tools display.
+    # The test UA stylesheet does not clip, so the fixture asks for it.
+    pdf = _tagged_image_pdf(
+        '<p>before</p>'
+        '<img src="{image_url}" alt="image"'
+        f' style="display:{display};overflow:hidden">'
+        '<p>after</p>')
+    assert _marked_content_order(pdf) == [b'Span', b'Figure', b'Span']
+
+
+@assert_no_logs
+def test_pdf_image_keeps_its_own_stacking_context_when_transformed():
+    # Only the clip stopped making images stacking contexts. A transformed
+    # image still is one, so CSS still paints it above its in-flow siblings.
+    pdf = _tagged_image_pdf(
+        '<p>before</p>'
+        '<img src="{image_url}" alt="image"'
+        ' style="overflow:hidden;transform:rotate(5deg)">'
+        '<p>after</p>')
+    assert _marked_content_order(pdf) == [b'Span', b'Span', b'Figure']
+
+
 def _tagged_image_pdf(content):
     """Render one image-tagging fixture with a visible raster image."""
     image_url = path2url(resource_path('pattern.png'))
@@ -2775,8 +2889,8 @@ def test_pdf_tags_static_native_control_pseudo_layout_owners(appearance):
       input {{{appearance};outline:2px solid green}}
       input::before,input::after {{content:"X";display:block;
         width:20px;height:20px;border:2px solid black;opacity:.6}}
-      </style><div style="opacity:.7"><input type="checkbox" aria-label="First">
-      <input type="checkbox" checked aria-label="Second"></div>
+      </style><div style="opacity:.7"><input type="checkbox" aria-label="First"
+      ><input type="checkbox" checked aria-label="Second"></div>
     ''').write_pdf(pdf_variant='pdf/ua-1', uncompressed_pdf=True)
     assert pdf.count(b'/O /PrintField') == 2
     assert pdf.count(b'/Desc (First)') == 1

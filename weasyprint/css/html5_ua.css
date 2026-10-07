@@ -167,6 +167,7 @@ input:is([type=checkbox i], [type=radio i])[checked]::before { background: black
 input[type=radio i], input[type=radio][checked]:before { border-radius: 50% }
 input[value]:not([type=checkbox i], [type=radio i])::before { content: attr(value); display: block; overflow: hidden }
 :is(input, input[value=""], input[type=checkbox i], input[type=radio i]) { content: ""; display: block }
+input:is([type=checkbox i], [type=radio i]) { display: inline-block }
 select { background: lightgrey; border-radius: .25em .25em; position: relative; white-space: normal }
 select[multiple] { height: 3.6em }
 select:not([multiple])::before { content: "˅"; position: absolute; right: 0; text-align: center; width: 1.5em }

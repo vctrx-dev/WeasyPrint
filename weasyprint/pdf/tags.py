@@ -32,6 +32,60 @@ def _resolve_table_headers(
     return pydyf.Array(headers), unresolved
 
 
+def _source_positions(element):
+    """Map every descendant of ``element`` to its position in HTML source."""
+    return {
+        id(descendant): position
+        for position, descendant in enumerate(element.iter())
+        if descendant is not element}
+
+
+def _source_position(box, positions):
+    """Return the first source position below ``box``, or ``None`` if unknown."""
+    if (position := positions.get(id(box.element))) is not None:
+        return position
+    return min((
+        position for position in (
+            _source_position(child, positions)
+            for child in getattr(box, 'children', ()))
+        if position is not None), default=None)
+
+
+def _in_source_order(box):
+    """Return the children of ``box`` in HTML source order.
+
+    Layout is allowed to diverge from source order: out-of-flow boxes leave
+    their sibling list, and flex and grid place their items visually. Tagged
+    reading order must follow the source document instead, so restore it here.
+    Table structure order is owned by the table code below.
+    """
+    children = box.children
+    if len(children) < 2 or box.element is None:
+        return children
+    if (box.is_table_wrapper or box.proper_table_child or
+            isinstance(box, boxes.TableBox)):
+        return children
+    visually_ordered = isinstance(
+        box, (boxes.FlexContainerBox, boxes.GridContainerBox))
+    if not visually_ordered and not any(
+            child.is_absolutely_positioned() for child in children):
+        return children
+    positions = _source_positions(box.element)
+    keys = []
+    previous = -1
+    for child in children:
+        position = _source_position(child, positions)
+        if position is None:
+            # Anonymous content has no source position of its own: keep it
+            # attached to the sibling it currently follows.
+            position = previous
+        previous = position
+        keys.append(position)
+    return [
+        children[index]
+        for index in sorted(range(len(keys)), key=keys.__getitem__)]
+
+
 def _get_link_annotations(box, tags):
     """Return the link annotations generated for this page's tag stream."""
     link_annotations = getattr(box, 'link_annotations', None)
@@ -174,6 +228,8 @@ def add_tags(pdf, document, pdf_version, page_streams):
         sorted_refs = [ref for _, ref in sorted(page_nums.items())]
         content_mapping['Nums'][-1].extend(sorted_refs)
 
+    _wrap_grouping_text(structure_document, pdf)
+
     next_struct_parent = len(document.pages)
     for stream, nums in form_nums.items():
         stream.extra['StructParents'] = next_struct_parent
@@ -304,6 +360,38 @@ def _table_child_insert_index(
     return len(parent['K'])
 
 
+def _semantic_container(element, pdf):
+    """Ignore neutral wrappers when deciding the logical content context."""
+    while element['S'] == '/NonStruct':
+        element = pdf.objects[int(element['P'].split()[0])]
+    return element
+
+
+def _wrap_grouping_text(element, pdf):
+    """Give implicit text runs a paragraph without changing inline semantics."""
+    container = _semantic_container(element, pdf)
+    if container['S'] not in ('/Document', '/Part', '/Art', '/Sect', '/Div'):
+        return
+    children = pydyf.Array()
+    paragraph = None
+    for reference in element['K']:
+        child = pdf.objects[int(reference.split()[0])]
+        if child['S'] in ('/Span', '/Link', '/Quote', '/Reference', '/Code'):
+            if paragraph is None:
+                paragraph = pydyf.Dictionary({
+                    'Type': '/StructElem', 'S': '/P', 'K': pydyf.Array(),
+                    'Pg': child['Pg'], 'P': element.reference,
+                })
+                pdf.add_object(paragraph)
+                children.append(paragraph.reference)
+            child['P'] = paragraph.reference
+            paragraph['K'].append(reference)
+        else:
+            paragraph = None
+            children.append(reference)
+    element['K'] = children
+
+
 def _has_tagged_descendant(box, tags):
     """Require existing text/image content, not a declared or hidden pseudo box."""
     return any(
@@ -382,7 +470,7 @@ def _build_box_tree(
     if element_tag in ('html', 'body') or isinstance(box, boxes.PageBox):
         # Avoid generate page, html and body boxes as a semantic node, yield children.
         if isinstance(box, boxes.ParentBox) and not isinstance(box, boxes.LineBox):
-            for child in box.children:
+            for child in _in_source_order(box):
                 yield from _build_box_tree(
                     child, parent, pdf, page_number, nums, form_nums,
                     annotations, tags,
@@ -504,6 +592,9 @@ def _build_box_tree(
         x2, y2 = x1 + box.width, y1 + box.height
         element['A'] = pydyf.Dictionary({
             'O': '/Layout',
+            'Placement': '/Inline' if _semantic_container(parent, pdf)['S'] in (
+                '/P', '/Span', '/Link', '/Quote', '/H1', '/H2', '/H3',
+                '/H4', '/H5', '/H6') else '/Block',
             'BBox': pydyf.Array((x1, y1, x2, y2)),
         })
         # Add alternate text for images/figures.
@@ -581,12 +672,15 @@ def _build_box_tree(
             element, annotation, pdf, page_number, annotations)
 
     # Build tree for box children.
-    for child in box.children:
+    for child in _in_source_order(box):
         children = child.children if isinstance(child, boxes.LineBox) else [child]
         for child in children:
             if isinstance(child, boxes.TextBox):
                 # Add marked element from the stream.
-                kid = tags.pop(child)
+                kid = tags.pop(child, None)
+                if kid is None:
+                    # Whitespace and hidden text have no tagged text content.
+                    continue
                 if tag == 'Link':
                     # Associate MCID directly with link reference.
                     element['K'].append(_add_marked_content(
@@ -810,5 +904,6 @@ def _build_box_tree(
                     headers = list(dict.fromkeys(headers))
                     cell.mark['A']['Headers'] = pydyf.Array(headers)
 
-    if new_element:
+    _wrap_grouping_text(element, pdf)
+    if new_element and (tag != 'Span' or element['K']):
         yield element

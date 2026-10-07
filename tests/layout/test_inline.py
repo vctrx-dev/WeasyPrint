@@ -2,9 +2,30 @@
 
 import pytest
 
+from weasyprint import HTML
 from weasyprint.formatting_structure import boxes
 
 from ..testing_utils import SANS_FONTS, assert_no_logs, render_pages
+
+
+@pytest.mark.parametrize('control_type', ['checkbox', 'radio'])
+@pytest.mark.parametrize('checked', ['', 'checked'])
+@assert_no_logs
+def test_native_selection_label_stays_on_same_line(control_type, checked):
+    document = HTML(string=f'''
+      <p><label><input type="{control_type}" {checked}> Choice label</label></p>
+    ''').render()
+    page = document.pages[0]._page_box
+    html, = page.children
+    body, = html.children
+    paragraph, = body.children
+    line, = paragraph.children
+    assert isinstance(line, boxes.LineBox)
+    label, = line.children
+    control, text = label.children
+    assert isinstance(control, boxes.InlineBlockBox)
+    assert text.text == ' Choice label'
+    assert control.position_x + control.margin_width() <= text.position_x
 
 
 @assert_no_logs

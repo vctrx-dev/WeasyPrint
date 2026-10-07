@@ -143,8 +143,8 @@ def table_layout(context, table, bottom_space, skip_stack, containing_block,
                 borders_plus_padding = cell.border_width()  # with width==0
                 # TODO: we should remove the number of columns with no
                 # originating cells to cell.colspan, see test_layout_table_auto_49.
-                cell.width = (
-                    sum(spanned_widths) +
+                cell.width = max(
+                    0, sum(spanned_widths) +
                     border_spacing_x * (cell.colspan - 1) -
                     borders_plus_padding)
                 if skip_stack:

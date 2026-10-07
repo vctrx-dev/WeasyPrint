@@ -699,6 +699,12 @@ def draw_replacedbox(stream, box):
 
     with stream.stacked():
         stream.set_alpha(1)
+        if box.style['overflow'] != 'visible':
+            # Replaced boxes are not drawn as their own stacking context, so the
+            # clip `overflow` asks for is applied here instead.
+            rounded_box(stream, box.rounded_padding_box())
+            stream.clip()
+            stream.end()
         stream.transform(e=draw_x, f=draw_y)
         with stream.stacked():
             # TODO: Use the real intrinsic size here, not affected by
@@ -730,8 +736,14 @@ def draw_inline_level(stream, page, box, offset_x=0, text_overflow='clip',
                 else:
                     child_offset_x = offset_x + child.position_x - box.position_x
                 if isinstance(child, boxes.TextBox):
+                    # Invisible text can still paint an underline, but must not
+                    # create a navigable text element without text content.
                     marker = (
-                        stream.artifact() if child.is_repeated_table_header
+                        stream.artifact() if (
+                            child.is_repeated_table_header or
+                            not child.text.strip() or
+                            child.style['visibility'] != 'visible' or
+                            child.style['font_size'] < 1e-6)
                         else stream.marked(child, 'Span'))
                     with marker:
                         draw_text(

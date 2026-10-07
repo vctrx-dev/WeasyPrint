@@ -8,6 +8,27 @@ from weasyprint.layout.table import collapse_table_borders
 from ..testing_utils import assert_no_logs, capture_logs, parse_all, render_pages
 
 
+@assert_no_logs
+@pytest.mark.parametrize('markup', [
+    '<table><tr><td class="label">Name</td><td class="value">Value</td></tr></table>',
+    '<div class="table"><div class="row"><div class="label">Name</div>'
+    '<div class="value">Value</div></div></div>',
+])
+def test_fixed_table_cell_content_width_cannot_be_negative(markup):
+    page, = render_pages('''<style>
+      table, .table { display: table; table-layout: fixed; width: 200px }
+      .row { display: table-row }
+      .label, .value { display: table-cell }
+      .label { padding-right: 8px }
+      .value { width: 100% }
+    </style>''' + markup)
+    cells = [box for box in page.descendants() if isinstance(box, boxes.TableCellBox)]
+    assert len(cells) == 2
+    assert all(cell.width >= 0 for cell in cells)
+    assert cells[0].width == 0
+    assert cells[0].padding_right == 8
+
+
 def _get_grid(html, grid_width, grid_height):
     html = parse_all(html)
     body, = html.children

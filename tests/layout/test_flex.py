@@ -6,6 +6,23 @@ from ..testing_utils import assert_no_logs, render_pages
 
 
 @assert_no_logs
+def test_flex_out_of_flow_child_keeps_source_order():
+    # Out-of-flow children used to be moved before every flex item.
+    page, = render_pages('''
+      <article style="display: flex; position: relative">
+        <div>A</div>
+        <aside style="position: absolute; top: 0; right: 0">B</aside>
+        <div>C</div>
+      </article>
+    ''')
+    html, = page.children
+    body, = html.children
+    article, = body.children
+    assert [child.element_tag for child in article.children] == [
+        'div', 'aside', 'div']
+
+
+@assert_no_logs
 def test_flex_direction_row():
     page, = render_pages('''
       <article style="display: flex">
