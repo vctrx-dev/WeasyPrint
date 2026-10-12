@@ -579,8 +579,13 @@ def table_layout(context, table, bottom_space, skip_stack, containing_block,
     if collapse:
         table.skipped_rows = skipped_rows
 
-    # If the height property has a bigger value, just add blank space
-    # below the last row group.
+    # Grow rows to fill a bigger specified height, as browsers do, when the
+    # whole table is in this fragment. Otherwise, the height property just
+    # adds blank space below the last row group.
+    # https://drafts.csswg.org/css-tables-3/#height-distribution
+    if table.height != 'auto' and skip_stack is None and resume_at is None:
+        position_y += distribute_table_height(
+            table.children, table.height - (position_y - table.content_box_y()))
     table.height = max(
         table.height if table.height != 'auto' else 0,
         position_y - table.content_box_y())
@@ -632,6 +637,50 @@ def table_layout(context, table, bottom_space, skip_stack, containing_block,
     collapsing_through = False
 
     return table, resume_at, next_page, adjoining_margins, collapsing_through
+
+
+def distribute_table_height(row_groups, extra_height):
+    """Grow rows to fill extra table height and return the added height.
+
+    Body rows grow in proportion to their heights, or equally when none has a
+    height. Header and footer rows keep their heights unless they are the only
+    rows. Cells grow with the rows they span and keep their vertical alignment.
+
+    """
+    if extra_height <= 0:
+        return 0
+    body_rows = [
+        row for group in row_groups if not (group.is_header or group.is_footer)
+        for row in group.children]
+    rows = body_rows or [row for group in row_groups for row in group.children]
+    if not rows:
+        return 0
+    total_height = sum(row.height for row in rows)
+    growths = {
+        id(row): extra_height * (
+            row.height / total_height if total_height > 0 else 1 / len(rows))
+        for row in rows}
+    offset = 0
+    for group in row_groups:
+        group.position_y += offset
+        row_growths = [growths.get(id(row), 0) for row in group.children]
+        for index, row in enumerate(group.children):
+            row.translate(dy=offset)
+            row.height += row_growths[index]
+            offset += row_growths[index]
+            for cell in row.children:
+                extra = sum(row_growths[index:index + cell.rowspan])
+                if not extra:
+                    continue
+                if cell.vertical_align == 'bottom':
+                    add_top_padding(cell, extra)
+                elif cell.vertical_align == 'middle':
+                    add_top_padding(cell, extra / 2)
+                    cell.padding_bottom += extra / 2
+                else:
+                    cell.padding_bottom += extra
+        group.height += sum(row_growths)
+    return extra_height
 
 
 def add_top_padding(box, extra_padding):

@@ -2131,6 +2131,120 @@ def test_table_vertical_align_float():
 
 
 @assert_no_logs
+def test_table_height_distributed_to_rows():
+    # A specified table height taller than its rows stretches the rows, as
+    # browsers do, instead of leaving blank space below the last row group.
+    page, = render_pages('''
+      <style>
+        @page { size: 200px }
+        table { width: 100px; height: 100px; border-spacing: 0 }
+        td { padding: 0 }
+      </style>
+      <table>
+        <tr><td style="height: 10px"></td></tr>
+        <tr><td style="height: 30px"></td></tr>
+      </table>
+    ''')
+    html, = page.children
+    body, = html.children
+    wrapper, = body.children
+    table, = wrapper.children
+    row_group, = table.children
+    row_1, row_2 = row_group.children
+    td_1, = row_1.children
+    td_2, = row_2.children
+    assert table.height == 100
+    assert row_group.height == 100
+    assert (row_1.position_y, row_1.height) == (0, 25)
+    assert (row_2.position_y, row_2.height) == (25, 75)
+    assert (td_1.position_y, td_1.border_height()) == (0, 25)
+    assert (td_2.position_y, td_2.border_height()) == (25, 75)
+
+
+@assert_no_logs
+def test_table_height_distribution_keeps_vertical_align():
+    page, = render_pages('''
+      <style>
+        @page { size: 200px }
+        table { width: 100px; height: 100px; border-spacing: 0 }
+        td { padding: 0; height: 20px; line-height: 0 }
+        div { display: inline-block; height: 10px; width: 10px }
+      </style>
+      <table><tr>
+        <td style="vertical-align: middle"><div></div></td>
+        <td style="vertical-align: bottom"><div></div></td>
+        <td style="vertical-align: top"><div></div></td>
+      </tr></table>
+    ''')
+    html, = page.children
+    body, = html.children
+    wrapper, = body.children
+    table, = wrapper.children
+    row_group, = table.children
+    row, = row_group.children
+    assert row.height == 100
+    middle, bottom, top = row.children
+    for cell in row.children:
+        assert cell.border_height() == 100
+    assert middle.children[0].children[0].position_y == (100 - 10) / 2
+    assert bottom.children[0].children[0].position_y == 100 - 10
+    assert top.children[0].children[0].position_y == 0
+
+
+@assert_no_logs
+def test_table_height_distribution_keeps_header_and_footer_rows():
+    page, = render_pages('''
+      <style>
+        @page { size: 200px }
+        table { width: 100px; height: 100px; border-spacing: 0 }
+        td { padding: 0; height: 10px }
+      </style>
+      <table>
+        <thead><tr><td></td></tr></thead>
+        <tbody><tr><td></td></tr></tbody>
+        <tfoot><tr><td></td></tr></tfoot>
+      </table>
+    ''')
+    html, = page.children
+    body, = html.children
+    wrapper, = body.children
+    table, = wrapper.children
+    header, body_group, footer = table.children
+    (header_row,), (body_row,), (footer_row,) = (
+        header.children, body_group.children, footer.children)
+    assert (header_row.position_y, header_row.height) == (0, 10)
+    assert (body_row.position_y, body_row.height) == (10, 80)
+    assert (footer.position_y, footer_row.position_y, footer_row.height) == (90, 90, 10)
+    footer_cell, = footer_row.children
+    assert footer_cell.position_y == 90
+
+
+@assert_no_logs
+def test_table_percentage_height_distributed_to_rows():
+    # A table filling a fixed-height block keeps its cell borders full height.
+    page, = render_pages('''
+      <style>
+        @page { size: 200px }
+        section { height: 40px }
+        .grid { display: table; width: 100%; height: 100% }
+        .cell { display: table-cell; border-left: 1px solid }
+      </style>
+      <section><div class="grid"><div class="cell">a</div></div></section>
+    ''')
+    html, = page.children
+    body, = html.children
+    section, = body.children
+    wrapper, = section.children
+    table, = wrapper.children
+    row_group, = table.children
+    row, = row_group.children
+    cell, = row.children
+    assert table.height == 40
+    assert row.height == 40
+    assert cell.border_height() == 40
+
+
+@assert_no_logs
 def test_table_wrapper():
     page, = render_pages('''
       <style>
