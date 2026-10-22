@@ -1950,6 +1950,33 @@ def test_pdf_tags_repeated_table_headers_are_artifacts():
     assert b'/ParentTree ' in pdf
 
 
+@assert_no_logs
+@pytest.mark.parametrize('content', [
+    'first line<br>second line',
+    '<img src="pattern.png" alt="Pattern" style="width: 20px; height: 20px">',
+])
+def test_pdf_tags_annotations_inside_link_belong_to_link(content):
+    # Boxes inside a link (line breaks, images) get their own link annotations.
+    # PDF/UA requires every link annotation to be referenced from a Link element.
+    pdf = FakeHTML(
+        string=f'<html lang="en"><p><a href="https://example.test">{content}</a></p>',
+        base_url=resource_path('<inline HTML>'),
+    ).write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = dict(re.findall(rb'(\d+) 0 obj\n(.*?)\nendobj', pdf, re.S))
+    (parent_tree,) = [
+        body for body in objects.values() if b'/Nums [' in body]
+    nums = re.search(rb'/Nums \[(.*)\]', parent_tree, re.S).group(1)
+    tokens = re.findall(rb'\[[^\]]*\]|\d+ 0 R|\d+', nums)
+    owners = dict(zip(tokens[0::2], tokens[1::2]))
+    annotations = [
+        body for body in objects.values() if b'/Subtype /Link' in body]
+    assert len(annotations) > 1
+    for annotation in annotations:
+        struct_parent = re.search(rb'/StructParent (\d+)', annotation).group(1)
+        owner = objects[owners[struct_parent].split()[0]]
+        assert b'/S /Link' in owner
+
+
 def test_pdf_tags_repeated_document_writes_keep_link_owners():
     rows = ''.join(f'<tr><td>row {index}</td></tr>' for index in range(8))
     document = FakeHTML(string=f'''

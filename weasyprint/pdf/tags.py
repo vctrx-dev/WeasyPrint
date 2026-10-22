@@ -411,7 +411,8 @@ def _build_box_tree(
         table_row_group_headers, table_row_indices, pending_table_headers,
         table_annotation_elements, table_structure_elements,
         table_header_elements, fragmented_table_elements, figure_elements,
-        pending_figure_captions, table_context=None, figure_context=None):
+        pending_figure_captions, table_context=None, figure_context=None,
+        link_context=None):
     """Recursively build tag tree for given box and yield children."""
 
     # Special case for absolute elements.
@@ -482,7 +483,8 @@ def _build_box_tree(
                     pending_table_headers, table_annotation_elements,
                     table_structure_elements, table_header_elements,
                     fragmented_table_elements, figure_elements,
-                    pending_figure_captions, table_context, figure_context)
+                    pending_figure_captions, table_context, figure_context,
+                    link_context)
             return
     elif isinstance(box, boxes.MarginBox):
         # Build tree for margin boxes but don’t link it to main tree. It ensures that
@@ -500,7 +502,8 @@ def _build_box_tree(
                 pending_table_headers, table_annotation_elements,
                 table_structure_elements, table_header_elements,
                 fragmented_table_elements, figure_elements,
-                pending_figure_captions, table_context, figure_context))
+                pending_figure_captions, table_context, figure_context,
+                link_context))
         return
     elif tag in ('TD', 'TH'):
         # Ignore anonymous blocks created for table cells.
@@ -542,7 +545,8 @@ def _build_box_tree(
                 pending_table_headers, table_annotation_elements,
                 table_structure_elements, table_header_elements,
                 fragmented_table_elements, figure_elements,
-                pending_figure_captions, table_context, figure_context)
+                pending_figure_captions, table_context, figure_context,
+                link_context)
             for child in children:
                 parent['K'].append(child.reference)
             yield parent
@@ -657,11 +661,15 @@ def _build_box_tree(
             element['K'].append(_add_marked_content(
                 element, tags.pop(box), page_number, nums, form_nums, pdf))
 
-    # Include link annotations.
+    # Include link annotations. Boxes inside a link, such as line breaks and
+    # images, get their own annotations: the enclosing Link element owns them.
+    if tag == 'Link':
+        link_context = element
+    link_owner = link_context or element
     for annotation in _get_link_annotations(box, tags):
         table_annotation_elements.setdefault(
-            ('Link', id(box.element)), element)
-        _add_annotation(element, annotation, pdf, page_number, annotations)
+            ('Link', id(box.element)), link_owner)
+        _add_annotation(link_owner, annotation, pdf, page_number, annotations)
 
     # Include widget annotations.
     if box.widget_annotation:
@@ -722,7 +730,8 @@ def _build_box_tree(
                     pending_table_headers, table_annotation_elements,
                     table_structure_elements, table_header_elements,
                     fragmented_table_elements, figure_elements,
-                    pending_figure_captions, table_context, figure_context))
+                    pending_figure_captions, table_context, figure_context,
+                    link_context))
                 child_index = _table_child_insert_index(
                     child_parent, child_elements, table_structure_elements,
                     table_context, child_index)
