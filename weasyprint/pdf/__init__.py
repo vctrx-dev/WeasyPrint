@@ -22,9 +22,11 @@ from .anchors import (  # isort:skip
 
 class _Tags(dict):
     """Marked-content records and their unique per-page annotation token."""
-    def __init__(self):
+    def __init__(self, matrix=None):
         super().__init__()
         self.annotation_token = object()
+        # Maps layout coordinates to PDF user space for structure attributes.
+        self.matrix = matrix
 
 
 VARIANTS = {
@@ -183,10 +185,9 @@ def generate_pdf(document, target, zoom, **options):
     pdf_pages, page_streams = [], []
     for page_number, (page, links_and_anchors) in enumerate(
             zip(document.pages, page_links_and_anchors)):
-        tags = _Tags() if pdf_tags else None
-
         # Draw from the top-left corner
         matrix = Matrix(scale, 0, 0, -scale, 0, page.height * scale)
+        tags = _Tags(matrix) if pdf_tags else None
 
         page_width = scale * (
             page.width + page.bleed['left'] + page.bleed['right'])

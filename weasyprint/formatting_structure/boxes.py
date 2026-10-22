@@ -78,6 +78,12 @@ class Box:
     is_repeated_table_header = False
     is_table_header_fixed_content = False
     is_decorative_image = False
+    # Content hidden from assistive technology, painted as an artifact.
+    is_artifact = False
+    # 'Header' or 'Footer' for hidden running page furniture.
+    pagination_artifact = None
+    # Inside del, s or strike: even blank text paints a meaningful strike line.
+    is_struck = False
     has_rendered_table_header = False
 
     # Other properties

@@ -2559,6 +2559,256 @@ def test_pdf_tags_static_native_control(input_type, role, checked, style):
 
 
 @assert_no_logs
+@pytest.mark.parametrize(('lang', 'input_type', 'checked', 'alt', 'alt_lang'), [
+    ('en', 'checkbox', True, 'check box, checked', None),
+    ('en-US', 'checkbox', False, 'check box, not checked', None),
+    ('en', 'radio', True, 'radio button, selected', None),
+    ('en', 'radio', False, 'radio button, not selected', None),
+    ('es', 'checkbox', True, 'casilla de verificación, marcada', None),
+    ('es-MX', 'checkbox', False, 'casilla de verificación, sin marcar', None),
+    ('fr', 'checkbox', True, 'case à cocher, cochée', None),
+    ('de', 'radio', False, 'Optionsfeld, nicht ausgewählt', None),
+    ('ja', 'checkbox', True, 'check box, checked', 'en'),
+])
+def test_pdf_tags_static_native_control_state_is_spoken(
+        lang, input_type, checked, alt, alt_lang):
+    # Screen readers ignore PrintField attributes, so a static control's
+    # state is lost unless the Form element also carries spoken text.
+    state = 'checked' if checked else ''
+    pdf = HTML(string=f'''
+      <html lang="{lang}"><title>Static control</title><body>
+        <label>Choice<input type="{input_type}" {state}></label>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    objects = _pdf_structure_objects(pdf)
+    control = next(
+        body for body in objects.values() if re.search(rb'/S /Form(?:/|>>)', body))
+    assert _pdf_text_string(control, b'Alt') == alt
+    if alt_lang is None:
+        assert b'/Lang' not in control
+    else:
+        assert _pdf_text_string(control, b'Lang') == alt_lang
+
+
+def _pdf_text_string(body, key):
+    """Decode a literal or UTF-16 hex PDF text string stored at ``key``."""
+    if match := re.search(rb'/' + key + rb' <([0-9a-fA-F]+)>', body):
+        data = bytes.fromhex(match.group(1).decode())
+        return data[2:].decode('utf-16-be')
+    if match := re.search(rb'/' + key + rb' \(((?:[^()\\]|\\.)*)\)', body):
+        return re.sub(rb'\\(.)', rb'\1', match.group(1)).decode('latin-1')
+
+
+@assert_no_logs
+@pytest.mark.parametrize(('tag', 'subtype'), [
+    ('footer', b'/Footer'), ('header', b'/Header')])
+def test_pdf_tags_hidden_page_furniture_is_pagination_artifact(tag, subtype):
+    # Running page furniture hidden from assistive technology in HTML is
+    # painted as a pagination artifact and kept out of the structure tree.
+    pdf = HTML(string=f'''
+      <html lang="en"><title>Furniture</title><body>
+        <p>Body text</p>
+        <{tag} aria-hidden="true"><p>Page 1</p><span>Form rev. 2023</span></{tag}>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    artifacts = re.findall(
+        rb'/Artifact\s*<</Type /Pagination\s*/Subtype (/\w+)>>\s*BDC(.*?)EMC',
+        pdf, re.S)
+    assert len(artifacts) == 2
+    assert all(found == subtype and b'TJ' in body for found, body in artifacts)
+    assert len(re.findall(rb'/MCID \d+', pdf)) == 1
+    assert not re.search(rb'/S /(?:P|Span|NonStruct)(?:/|>>)[^\n]*Page 1', pdf)
+    assert not re.search(rb'/S /Div(?:/|>>)', pdf)
+
+
+@assert_no_logs
+def test_pdf_tags_hidden_generic_content_is_an_artifact():
+    pdf = HTML(string='''
+      <html lang="en"><title>Hidden</title><body>
+        <p>Body text</p><div aria-hidden="true">Decorative glyphs</div>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    assert re.search(rb'/Artifact\s+BMC[^E]*TJ', pdf)
+    assert len(re.findall(rb'/MCID \d+', pdf)) == 1
+
+
+@assert_no_logs
+@pytest.mark.parametrize('content', [
+    '<a href="https://example.com/">Link</a>',
+    '<label>Choice<input type="checkbox" checked></label>',
+])
+def test_pdf_tags_hidden_content_with_annotations_stays_semantic(content):
+    # Links and widgets need a structure owner, so their subtree stays tagged.
+    pdf = HTML(string=f'''
+      <html lang="en"><title>Hidden</title><body>
+        <p>Body text</p><footer aria-hidden="true">{content}</footer>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    assert b'/Pagination' not in pdf
+    assert len(re.findall(rb'/MCID \d+', pdf)) >= 2
+
+
+@assert_no_logs
+@pytest.mark.parametrize(('lang', 'tag', 'actual_text'), [
+    ('en', 'del', 'crossed out: No'),
+    ('en', 's', 'crossed out: No'),
+    ('en', 'strike', 'crossed out: No'),
+    ('es', 'del', 'tachado: No'),
+])
+def test_pdf_tags_line_through_text_is_spoken(lang, tag, actual_text):
+    pdf = HTML(string=f'''
+      <html lang="{lang}"><title>Correction</title><body>
+        <p>Answer: <{tag}>No</{tag}> PB</p>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    objects = _pdf_structure_objects(pdf)
+    struck = [
+        body for body in objects.values()
+        if b'/TextDecorationType /LineThrough' in body]
+    assert len(struck) == 1
+    assert re.search(rb'/S /Span(?:/|>>)', struck[0])
+    assert b'/O /Layout' in struck[0]
+    assert _pdf_text_string(struck[0], b'ActualText') == actual_text
+
+
+@assert_no_logs
+def test_pdf_tags_line_through_blank_is_spoken():
+    # A struck-out blank is visible content: its line is painted, so the
+    # element keeps tagged content and says that something was crossed out.
+    pdf = HTML(string='''
+      <html lang="en"><title>Correction</title><body>
+        <p>How many <del>&nbsp;&nbsp;&nbsp;</del> JB</p>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    objects = _pdf_structure_objects(pdf)
+    struck = next(
+        (reference, body) for reference, body in objects.items()
+        if b'/TextDecorationType /LineThrough' in body)
+    assert _pdf_text_string(struck[1], b'ActualText') == 'crossed out'
+    assert re.search(rb'/K \[\d+ 0 R', struck[1])
+
+
+@assert_no_logs
+def test_pdf_tags_line_through_never_hides_a_control_or_image():
+    # ActualText replaces every descendant, which would silence a check box
+    # state or an image alternative inside the struck element.
+    image_url = path2url(resource_path('pattern.png'))
+    pdf = HTML(string=f'''
+      <html lang="en"><title>Correction</title><body>
+        <p><del><label>No<input type="checkbox"></label></del></p>
+        <p><s><img src="{image_url}" alt="Initials"> PB</s></p>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    assert pdf.count(b'/TextDecorationType /LineThrough') == 2
+    assert b'/ActualText' not in pdf
+    control = next(
+        body for body in _pdf_structure_objects(pdf).values()
+        if re.search(rb'/S /Form(?:/|>>)', body))
+    assert _pdf_text_string(control, b'Alt') == 'check box, not checked'
+
+
+@assert_no_logs
+def test_pdf_tags_line_through_without_known_language_keeps_attribute_only():
+    pdf = HTML(string='''
+      <html lang="ja"><title>Correction</title><body><p><del>No</del></p></body></html>
+    ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    assert b'/TextDecorationType /LineThrough' in pdf
+    assert b'/ActualText' not in pdf
+
+
+@assert_no_logs
+@pytest.mark.parametrize('note', [
+    '<p id="fn1" role="doc-footnote">1 Footnote text</p>',
+    '<aside id="fn1" role="doc-footnote"><p>1 Footnote text</p></aside>',
+])
+def test_pdf_tags_footnote_is_note_with_registered_id(note):
+    pdf = HTML(string=f'''
+      <html lang="en"><title>Notes</title><body>
+        <p>Body<sup role="doc-noteref">1</sup> text</p>{note}
+      </body></html>
+    ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    objects = _pdf_structure_objects(pdf)
+    notes = [
+        (reference, body) for reference, body in objects.items()
+        if re.search(rb'/S /Note(?:/|>>)', body)]
+    assert len(notes) == 1
+    reference, body = notes[0]
+    assert b'/ID (fn1)' in body
+    id_tree = objects[re.search(rb'/IDTree (\d+ 0 R)', pdf).group(1)]
+    assert re.search(rb'\(fn1\) ' + reference, id_tree)
+    assert len(re.findall(rb'/S /Reference(?:/|>>)', pdf)) == 1
+
+
+@assert_no_logs
+@pytest.mark.parametrize(('link', 'contents'), [
+    ('<a href="#fn1" role="doc-noteref">1</a>', '1'),
+    ('<a href="#fn1" aria-label="Footnote 1">1</a>', 'Footnote 1'),
+    ('<a href="#fn1"> Note\n one </a>', 'Note one'),
+    ('<a href="https://example.com/">Example</a>', 'https://example.com/'),
+])
+def test_pdf_tags_internal_link_contents_describe_the_link(link, contents):
+    # An internal link's description is its accessible text, not the
+    # destination name, which is an identifier that merging may rename.
+    pdf = HTML(string=f'''
+      <html lang="en"><title>Links</title><body>
+        <p>Body{link}</p><p id="fn1">1 Note</p>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    annotation = next(
+        body for body in _pdf_structure_objects(pdf).values()
+        if b'/Subtype /Link' in body)
+    assert _pdf_text_string(annotation, b'Contents') == contents
+
+
+@assert_no_logs
+@pytest.mark.parametrize(('label', 'alt'), [
+    (' aria-label=" Footnote  1 "', 'Footnote 1'), ('', None)])
+def test_pdf_tags_link_aria_label_is_its_alternate_description(label, alt):
+    # The accessible name of a link replaces its text for assistive technology.
+    pdf = HTML(string=f'''
+      <html lang="en"><title>Links</title><body>
+        <p>Body<a href="#fn1"{label}>1</a></p><p id="fn1">1 Note</p>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    link = next(
+        body for body in _pdf_structure_objects(pdf).values()
+        if re.search(rb'/S /Link(?:/|>>)', body))
+    assert _pdf_text_string(link, b'Alt') == alt
+
+
+@assert_no_logs
+def test_pdf_tags_footnote_without_id_gets_unique_id():
+    pdf = HTML(string='''
+      <html lang="en"><title>Notes</title><body>
+        <p role="doc-footnote">1 First</p><p role="doc-footnote">2 Second</p>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    objects = _pdf_structure_objects(pdf)
+    ids = [
+        re.search(rb'/ID \(([^)]+)\)', body).group(1)
+        for body in objects.values() if re.search(rb'/S /Note(?:/|>>)', body)]
+    assert len(ids) == len(set(ids)) == 2
+
+
+@assert_no_logs
+@pytest.mark.parametrize('zoom', [1, 2])
+def test_pdf_tags_figure_bbox_uses_pdf_user_space(zoom):
+    image_url = path2url(resource_path('pattern.png'))
+    pdf = FakeHTML(string=f'''
+      <html lang="en"><body>
+        <style>@page {{ size: 400px 300px; margin: 0 }}</style>
+        <img src="{image_url}" alt="image"
+             style="position:absolute;left:96px;top:96px;width:96px;height:48px">
+      </body></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True, zoom=zoom)
+    bbox = [float(value) for value in re.search(
+        rb'/BBox \[([^]]*)\]', pdf).group(1).split()]
+    scale = 0.75 * zoom
+    assert bbox == pytest.approx([
+        96 * scale, (300 - 144) * scale, 192 * scale, (300 - 96) * scale])
+
+
+@assert_no_logs
 @pytest.mark.parametrize('content', [
     '<label><strong>Choice</strong><input type="checkbox"></label>',
     '<table><tr><td><label for="x"><em>Choice</em></label></td>'

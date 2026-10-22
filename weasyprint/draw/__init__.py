@@ -739,9 +739,10 @@ def draw_inline_level(stream, page, box, offset_x=0, text_overflow='clip',
                     # Invisible text can still paint an underline, but must not
                     # create a navigable text element without text content.
                     marker = (
-                        stream.artifact() if (
+                        stream.artifact(child.pagination_artifact) if (
                             child.is_repeated_table_header or
-                            not child.text.strip() or
+                            child.is_artifact or
+                            not (child.text.strip() or child.is_struck) or
                             child.style['visibility'] != 'visible' or
                             child.style['font_size'] < 1e-6)
                         else stream.marked(child, 'Span'))
@@ -753,8 +754,9 @@ def draw_inline_level(stream, page, box, offset_x=0, text_overflow='clip',
                         stream, page, child, child_offset_x, text_overflow, ellipsis)
         elif isinstance(box, boxes.InlineReplacedBox):
             marker = (
-                stream.artifact() if (
-                    box.is_repeated_table_header or box.is_decorative_image)
+                stream.artifact(box.pagination_artifact) if (
+                    box.is_repeated_table_header or box.is_decorative_image or
+                    box.is_artifact)
                 else stream.marked(box, 'Figure'))
             with marker:
                 draw_replacedbox(stream, box)
@@ -768,8 +770,9 @@ def draw_block_level(page, stream, blocks_and_cells):
     for block, blocks_and_cells in blocks_and_cells.items():
         if isinstance(block, boxes.ReplacedBox):
             marker = (
-                stream.artifact() if (
-                    block.is_repeated_table_header or block.is_decorative_image)
+                stream.artifact(block.pagination_artifact) if (
+                    block.is_repeated_table_header or block.is_decorative_image or
+                    block.is_artifact)
                 else stream.marked(block, 'Figure'))
             with marker:
                 draw_replacedbox(stream, block)

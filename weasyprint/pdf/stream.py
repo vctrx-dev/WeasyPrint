@@ -297,9 +297,14 @@ class Stream(pydyf.Stream):
                 super().end_marked_content()
 
     @contextmanager
-    def artifact(self):
+    def artifact(self, pagination=None):
+        """Mark artifact content, with a 'Header' or 'Footer' pagination subtype."""
         if self._tags is not None:
-            super().begin_marked_content('Artifact')
+            if pagination is None:
+                super().begin_marked_content('Artifact')
+            else:
+                super().begin_marked_content('Artifact', pydyf.Dictionary({
+                    'Type': '/Pagination', 'Subtype': f'/{pagination}'}))
         try:
             yield
         finally:

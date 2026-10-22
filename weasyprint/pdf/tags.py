@@ -6,9 +6,57 @@ import pydyf
 
 from ..css import AnonymousStyle
 from ..formatting_structure import boxes
-from ..html import SPACE_SEPARATED_TOKENS_RE
+from ..html import SPACE_SEPARATED_TOKENS_RE, ascii_lower
 from ..layout.absolute import AbsolutePlaceholder
 from ..logger import LOGGER
+
+# Screen readers announce neither PrintField attributes nor text decoration,
+# so static controls and line-through text also carry the words spoken for
+# their HTML equivalents, in the language of the content.
+_SPOKEN_CUES = {
+    'en': {
+        'checkbox': ('check box, checked', 'check box, not checked'),
+        'radio': ('radio button, selected', 'radio button, not selected'),
+        'line-through': 'crossed out',
+    },
+    'es': {
+        'checkbox': (
+            'casilla de verificación, marcada',
+            'casilla de verificación, sin marcar'),
+        'radio': ('botón de opción, seleccionado', 'botón de opción, no seleccionado'),
+        'line-through': 'tachado',
+    },
+    'fr': {
+        'checkbox': ('case à cocher, cochée', 'case à cocher, non cochée'),
+        'radio': ('bouton radio, sélectionné', 'bouton radio, non sélectionné'),
+        'line-through': 'barré',
+    },
+    'de': {
+        'checkbox': (
+            'Kontrollkästchen, aktiviert', 'Kontrollkästchen, nicht aktiviert'),
+        'radio': ('Optionsfeld, ausgewählt', 'Optionsfeld, nicht ausgewählt'),
+        'line-through': 'durchgestrichen',
+    },
+}
+_LINE_THROUGH_TAGS = ('del', 's', 'strike')
+_NON_TEXT_TAGS = (
+    'input', 'select', 'textarea', 'button', 'img', 'object', 'embed',
+    '{http://www.w3.org/2000/svg}svg')
+
+
+def _spoken_cues(box):
+    """Return the cues for the box language, and 'en' when they fall back."""
+    language = (box.style['lang'] or '').split('-')[0].lower()
+    if language in _SPOKEN_CUES:
+        return _SPOKEN_CUES[language], None
+    return _SPOKEN_CUES['en'], 'en'
+
+
+def _aria_roles(box):
+    """Return the ARIA role tokens of the element generating ``box``."""
+    if box.element is None or '::' in (box.element_tag or ''):
+        return ()
+    return SPACE_SEPARATED_TOKENS_RE.findall(ascii_lower(box.element.get('role', '')))
 
 
 def _resolve_table_headers(
@@ -279,7 +327,7 @@ def _get_pdf_tag(tag):
     elif tag.split(':')[0] == 'a':
         # Links and link pseudo elements create link annotations.
         return 'Link'
-    elif tag == 'span':
+    elif tag == 'span' or tag in _LINE_THROUGH_TAGS:
         return 'Span'
     elif tag == 'main':
         return 'Part'
@@ -419,7 +467,7 @@ def _build_box_tree(
     if isinstance(box, AbsolutePlaceholder):
         box = box._box
 
-    if box.is_decorative_image:
+    if box.is_decorative_image or box.is_artifact:
         return
 
     if box.is_repeated_table_header:
@@ -457,6 +505,11 @@ def _build_box_tree(
         _has_tagged_descendant(box, tags))
     if static_control:
         tag = 'Form'
+    roles = _aria_roles(box)
+    if 'doc-footnote' in roles and tag in ('P', 'Div', 'Sect', 'Span', 'NonStruct'):
+        tag = 'Note'
+    elif 'doc-noteref' in roles and tag in ('Span', 'NonStruct'):
+        tag = 'Reference'
     if element_tag == 'figure':
         figure_context = id(box.element)
     if tag == 'Table':
@@ -591,15 +644,19 @@ def _build_box_tree(
 
     # Handle special cases.
     if tag == 'Figure':
-        # Add extra data for images.
+        # Add extra data for images. BBox is in PDF user space.
         x1, y1 = box.content_box_x(), box.content_box_y()
         x2, y2 = x1 + box.width, y1 + box.height
+        if tags.matrix is not None:
+            x1, y1 = tags.matrix.transform_point(x1, y1)
+            x2, y2 = tags.matrix.transform_point(x2, y2)
         element['A'] = pydyf.Dictionary({
             'O': '/Layout',
             'Placement': '/Inline' if _semantic_container(parent, pdf)['S'] in (
                 '/P', '/Span', '/Link', '/Quote', '/H1', '/H2', '/H3',
                 '/H4', '/H5', '/H6') else '/Block',
-            'BBox': pydyf.Array((x1, y1, x2, y2)),
+            'BBox': pydyf.Array((
+                min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))),
         })
         # Add alternate text for images/figures.
         # If it's an SVG element, we look for the <title> element inside.
@@ -648,15 +705,42 @@ def _build_box_tree(
         # TODO: don’t use the box to store this.
         box.mark = element
         box.mark_content_length = len(element['K'])
+    elif tag == 'Note' and new_element:
+        # PDF/UA requires an ID on every Note. The ID tree registry also
+        # holds table header IDs, which are digits and hyphens only.
+        note_id = box.element.get('id') or 'note'
+        unique_id, suffix = note_id, 1
+        while unique_id in table_header_elements:
+            suffix += 1
+            unique_id = f'{note_id}-{suffix}'
+        element['ID'] = pydyf.String(unique_id)
+        table_header_elements[unique_id] = element
+    elif element_tag in _LINE_THROUGH_TAGS and new_element:
+        element['A'] = pydyf.Dictionary({
+            'O': '/Layout', 'TextDecorationType': '/LineThrough'})
+        cues, cue_language = _spoken_cues(box)
+        text = ' '.join(''.join(box.element.itertext()).split())
+        # ActualText replaces every descendant: never silence a control or image.
+        text_only = not any(
+            descendant.tag in _NON_TEXT_TAGS for descendant in box.element.iter())
+        if text_only and cue_language is None:
+            cue = cues['line-through']
+            element['ActualText'] = pydyf.String(f'{cue}: {text}' if text else cue)
 
     if static_control:
+        control_type = box.element.get('type').lower()
+        checked = 'checked' in box.element.attrib
         element['A'] = pydyf.Dictionary({
             'O': '/PrintField',
-            'Role': '/cb' if box.element.get('type').lower() == 'checkbox' else '/rb',
-            'checked': '/on' if 'checked' in box.element.attrib else '/off',
+            'Role': '/cb' if control_type == 'checkbox' else '/rb',
+            'checked': '/on' if checked else '/off',
         })
         if box.static_control_name:
             element['A']['Desc'] = pydyf.String(box.static_control_name)
+        cues, cue_language = _spoken_cues(box)
+        element['Alt'] = pydyf.String(cues[control_type][0 if checked else 1])
+        if cue_language is not None:
+            element['Lang'] = pydyf.String(cue_language)
         if control_content:
             element['K'].append(_add_marked_content(
                 element, tags.pop(box), page_number, nums, form_nums, pdf))
@@ -665,6 +749,10 @@ def _build_box_tree(
     # images, get their own annotations: the enclosing Link element owns them.
     if tag == 'Link':
         link_context = element
+        # An accessible name replaces the link text for assistive technology.
+        if element_tag == 'a' and (
+                label := ' '.join(box.element.get('aria-label', '').split())):
+            element['Alt'] = pydyf.String(label)
     link_owner = link_context or element
     for annotation in _get_link_annotations(box, tags):
         table_annotation_elements.setdefault(

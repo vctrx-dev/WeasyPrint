@@ -84,10 +84,41 @@ def build_formatting_structure(element_tree, style_for, get_image_from_uri,
     # Names need the complete DOM and computed styles, not page-local text.
     # The name on each control survives pagination and Document.copy().
     control_names = get_static_control_names(element_tree, style_for)
+    hidden_roots = _get_artifact_roots(element_tree)
+    struck = {
+        child for element in element_tree.iter()
+        if element.tag in ('del', 's', 'strike') for child in element.iter()}
     for descendant in box.descendants():
         if descendant.element_tag == 'input':
             descendant.static_control_name = control_names.get(descendant.element)
+        if (root := hidden_roots.get(descendant.element)) is not None:
+            descendant.is_artifact = True
+            descendant.pagination_artifact = {
+                'header': 'Header', 'footer': 'Footer'}.get(root.tag)
+        descendant.is_struck = descendant.element in struck
     return box
+
+
+def _get_artifact_roots(element_tree):
+    """Map elements hidden from assistive technology to their hidden root.
+
+    ``aria-hidden="true"`` content has no accessibility semantics, so it is
+    painted as an artifact. Links and form controls need a structure owner
+    for their annotations: a subtree containing one keeps its semantics.
+    """
+    roots = {}
+    for element in element_tree.iter():
+        if (element in roots or not isinstance(element.tag, str) or
+                html.ascii_lower(element.get('aria-hidden', '').strip()) != 'true'):
+            continue
+        if any(
+                (child.tag == 'a' and child.get('href') is not None) or
+                child.tag in ('input', 'select', 'textarea', 'button')
+                for child in element.iter()):
+            continue
+        for child in element.iter():
+            roots.setdefault(child, element)
+    return roots
 
 
 def make_box(element_tag, style, content, element):

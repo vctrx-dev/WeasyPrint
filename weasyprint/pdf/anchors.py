@@ -20,6 +20,16 @@ from ..urls import URLFetchingError
 MIMETYPES = mimetypes.MimeTypes()
 
 
+def _internal_link_description(box):
+    """Return the accessible text of an internal link, not its destination name."""
+    element = box.element
+    if element is None or element.tag != 'a':
+        return None
+    return (
+        ' '.join(element.get('aria-label', '').split()) or
+        ' '.join(''.join(element.itertext()).split()) or None)
+
+
 def add_links(links_and_anchors, matrix, pdf, page, names, tags):
     """Include hyperlinks in given PDF page."""
     links, anchors = links_and_anchors
@@ -35,7 +45,9 @@ def add_links(links_and_anchors, matrix, pdf, page, names, tags):
                 'BS': pydyf.Dictionary({'W': 0}),
             })
             if tags is not None:
-                box.link_annotation['Contents'] = pydyf.String(link_target)
+                box.link_annotation['Contents'] = pydyf.String(
+                    _internal_link_description(box) or link_target
+                    if link_type == 'internal' else link_target)
                 link_annotations = getattr(box, 'link_annotations', None)
                 if link_annotations is None:
                     box.link_annotations = link_annotations = {}
