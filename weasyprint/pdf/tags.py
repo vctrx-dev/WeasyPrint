@@ -12,9 +12,10 @@ from ..html import SPACE_SEPARATED_TOKENS_RE, ascii_lower
 from ..layout.absolute import AbsolutePlaceholder
 from ..logger import LOGGER
 
-# Screen readers announce neither PrintField attributes nor text decoration,
-# so static controls and line-through text also carry the words spoken for
-# their HTML equivalents, in the language of the content.
+# Acrobat announces a PrintField Form as an unavailable, read-only field and
+# other readers ignore it, and no reader announces text decoration. Static
+# controls and line-through text are spoken words instead, as for their HTML
+# equivalents, in the language of the content.
 _SPOKEN_CUES = {
     'en': {
         'checkbox': ('check box, checked', 'check box, not checked'),
@@ -75,18 +76,13 @@ def _is_static_control(box, tags):
 
 
 def _set_static_control_attributes(element, control, name, cues, label=''):
-    """Describe a static control, spoken with its state after any label text."""
+    """Speak a static control's state after its label, or a name read nowhere else."""
     control_type = control.get('type').lower()
-    checked = 'checked' in control.attrib
-    element['A'] = pydyf.Dictionary({
-        'O': '/PrintField',
-        'Role': '/cb' if control_type == 'checkbox' else '/rb',
-        'checked': '/on' if checked else '/off',
-    })
-    if name:
-        element['A']['Desc'] = pydyf.String(name)
-    state = cues[control_type][0 if checked else 1]
-    element['Alt'] = pydyf.String(f'{label}, {state}' if label else state)
+    state = cues[control_type][0 if 'checked' in control.attrib else 1]
+    spoken = label or name
+    # The label's own punctuation already pauses before the state.
+    separator = ', ' if re.search(r'[\w)\]\'"’”]$', spoken) else ' '
+    element['Alt'] = pydyf.String(f'{spoken}{separator}{state}' if spoken else state)
 
 
 def _aria_roles(box):
@@ -543,8 +539,8 @@ def _build_box_tree(
     tag = _get_pdf_tag(element_tag)
     control_content = tags.get(box, {}).get('tag') == 'Form'
     static_control = _is_static_control(box, tags)
-    # A label wrapping one static control is that control's Form, so the
-    # option is spoken with its state and its text is not read again.
+    # A label wrapping one static control is that control, so the option is
+    # spoken with its state and its text is not read again.
     label_control = None
     if form_context is None and (
             owner := getattr(box, 'static_control_label', None)) is not None:
@@ -554,7 +550,7 @@ def _build_box_tree(
                 for descendant in box.descendants(placeholders=True)):
             label_control = owner
     if label_control is not None or (static_control and form_context is None):
-        tag = 'Form'
+        tag = 'Span'
     roles = _aria_roles(box)
     if 'doc-footnote' in roles and tag in ('P', 'Div', 'Sect', 'Span', 'NonStruct'):
         tag = 'Note'

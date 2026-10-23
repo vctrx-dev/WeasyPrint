@@ -15,7 +15,8 @@ def get_static_control_names(root, style_for):
     CSS-generated content and embedded control values are not resolved here.
     Never infer a name from nearby text, a submission name, or a checkbox value.
 
-    Return the control names, and the labels that wrap and name exactly one
+    Return the names the PDF reads nowhere else, empty when the name is text
+    read where it is printed, and the labels that wrap and name exactly one
     checkbox or radio control, mapped to that control and to the label text
     with crossed-out words bracketed.
     """
@@ -50,12 +51,13 @@ def get_static_control_names(root, style_for):
         return (hidden_subtree(element) or
                 style_for(element)['visibility'] != 'visible')
 
-    def text(element, include_hidden=False, mark_struck=False):
+    def text(element, include_hidden=False, mark_struck=False, printed=False):
+        # Printed text is what the PDF reads in place: never an aria-label.
         if not isinstance(element.tag, str) or (
                 not include_hidden and hidden_subtree(element)):
             return ''
         visible = include_hidden or style_for(element)['visibility'] == 'visible'
-        if visible and (name := element.get('aria-label', '').strip()):
+        if visible and not printed and (name := element.get('aria-label', '').strip()):
             return name
         if element.tag == 'img':
             return element.get('alt', '') if visible else ''
@@ -66,7 +68,8 @@ def get_static_control_names(root, style_for):
         struck = mark_struck and element.tag in STRUCK_TAGS
         result = (element.text or '') if visible else ''
         for child in element:
-            child_text = text(child, include_hidden, mark_struck and not struck)
+            child_text = text(
+                child, include_hidden, mark_struck and not struck, printed)
             style = style_for(child) if isinstance(child.tag, str) else None
             if style is not None and style['display'][0] not in ('inline', 'none'):
                 child_text = f' {child_text} '
@@ -99,14 +102,19 @@ def get_static_control_names(root, style_for):
         references = [ids[token] for token in dict.fromkeys(
             html.SPACE_SEPARATED_TOKENS_RE.findall(element.get('aria-labelledby', '')))
             if token in ids]
+        printed = ''
         if references:
             # An explicitly referenced hidden subtree still supplies a name.
             name = ' '.join(text(reference, hidden(reference))
                             for reference in references)
+            printed = ' '.join(
+                text(reference, printed=True) for reference in references)
         elif name := element.get('aria-label', '').strip():
             pass
         elif element in labels:
             name = ' '.join(text(label, hidden(label)) for label in labels[element])
+            printed = ' '.join(
+                text(label, printed=True) for label in labels[element])
             label = labels[element][0]
             # A link or another control in the label keeps its own semantics.
             if len(labels[element]) == 1 and element in label.iter() and not any(
@@ -121,5 +129,6 @@ def get_static_control_names(root, style_for):
                 label_owners[label] = (element, ' '.join(spoken.split()))
         else:
             name = element.get('title', '')
-        names[element] = ' '.join(name.split())
+        name = ' '.join(name.split())
+        names[element] = '' if name == ' '.join(printed.split()) else name
     return names, label_owners

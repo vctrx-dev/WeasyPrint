@@ -55,6 +55,5 @@ def test_pdf_tags_keep_blank_cells_and_control_state():
       <label><input type="checkbox" checked>Selected</label>
     ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
     assert re.search(rb'/S /TD/K\s*\[\]', pdf)
-    assert b'/O /PrintField' in pdf
-    assert b'/checked /on' in pdf
-    assert b'/S /Form' in pdf
+    assert b'/PrintField' not in pdf
+    assert b'/Alt (Selected, check box, checked)' in pdf
