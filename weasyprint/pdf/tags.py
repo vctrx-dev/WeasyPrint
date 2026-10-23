@@ -1,11 +1,13 @@
 """PDF tagging."""
 
+import re
 from collections import defaultdict
 
 import pydyf
 
 from ..css import AnonymousStyle
 from ..formatting_structure import boxes
+from ..formatting_structure.names import STRUCK_END, STRUCK_START
 from ..html import SPACE_SEPARATED_TOKENS_RE, ascii_lower
 from ..layout.absolute import AbsolutePlaceholder
 from ..logger import LOGGER
@@ -50,6 +52,41 @@ def _spoken_cues(box):
     if language in _SPOKEN_CUES:
         return _SPOKEN_CUES[language], None
     return _SPOKEN_CUES['en'], 'en'
+
+
+def _spoken_label(text, cue):
+    """Speak the crossed-out words of a label with the line-through cue."""
+    def crossed_out(match):
+        words = match.group(1).strip()
+        return f' {cue}: {words}, ' if words else f' {cue}, '
+    text = re.sub(f'{STRUCK_START}(.*?){STRUCK_END}', crossed_out, text, flags=re.S)
+    return re.sub(r'\s+,', ',', ' '.join(text.split())).strip(' ,')
+
+
+def _is_static_control(box, tags):
+    """Whether ``box`` is a painted checkbox or radio without interactive field."""
+    return tags.get(box, {}).get('tag') == 'Form' or (
+        box.element_tag == 'input' and not box.is_input() and
+        not isinstance(box.style, AnonymousStyle) and
+        box.style['visibility'] == 'visible' and
+        getattr(box, 'static_control_name', None) is not None and
+        box.element.get('type', '').lower() in ('checkbox', 'radio') and
+        _has_tagged_descendant(box, tags))
+
+
+def _set_static_control_attributes(element, control, name, cues, label=''):
+    """Describe a static control, spoken with its state after any label text."""
+    control_type = control.get('type').lower()
+    checked = 'checked' in control.attrib
+    element['A'] = pydyf.Dictionary({
+        'O': '/PrintField',
+        'Role': '/cb' if control_type == 'checkbox' else '/rb',
+        'checked': '/on' if checked else '/off',
+    })
+    if name:
+        element['A']['Desc'] = pydyf.String(name)
+    state = cues[control_type][0 if checked else 1]
+    element['Alt'] = pydyf.String(f'{label}, {state}' if label else state)
 
 
 def _aria_roles(box):
@@ -242,11 +279,20 @@ def add_tags(pdf, document, pdf_version, page_streams):
     figure_elements = {}
     pending_figure_captions = defaultdict(list)
     fragmented_table_elements = set()
+    label_boxes = defaultdict(list)
     for page in document.pages:
         for box in page._page_box.descendants(placeholders=True):
             if (isinstance(box, boxes.TableBox) and
                     box.is_fragmented_table and box.element is not None):
                 fragmented_table_elements.add(id(box.element))
+            if getattr(box, 'static_control_label', None) is not None:
+                label_boxes[id(box.element)].append(box)
+    # A label split over lines or pages, or copied, would speak once per box:
+    # its control keeps its own Form and its text stays separate.
+    for owned_boxes in label_boxes.values():
+        if sum(not isinstance(box.style, AnonymousStyle) for box in owned_boxes) != 1:
+            for box in owned_boxes:
+                box.static_control_label = None
     for page_number, (page, stream) in enumerate(zip(document.pages, page_streams)):
         tags = stream._tags
         page_box = page._page_box
@@ -460,7 +506,7 @@ def _build_box_tree(
         table_annotation_elements, table_structure_elements,
         table_header_elements, fragmented_table_elements, figure_elements,
         pending_figure_captions, table_context=None, figure_context=None,
-        link_context=None):
+        link_context=None, form_context=None):
     """Recursively build tag tree for given box and yield children."""
 
     # Special case for absolute elements.
@@ -496,14 +542,18 @@ def _build_box_tree(
     element_tag = None if box.element is None else box.element_tag
     tag = _get_pdf_tag(element_tag)
     control_content = tags.get(box, {}).get('tag') == 'Form'
-    static_control = control_content or (
-        element_tag == 'input' and not box.is_input() and
-        not isinstance(box.style, AnonymousStyle) and
-        box.style['visibility'] == 'visible' and
-        getattr(box, 'static_control_name', None) is not None and
-        box.element.get('type', '').lower() in ('checkbox', 'radio') and
-        _has_tagged_descendant(box, tags))
-    if static_control:
+    static_control = _is_static_control(box, tags)
+    # A label wrapping one static control is that control's Form, so the
+    # option is spoken with its state and its text is not read again.
+    label_control = None
+    if form_context is None and (
+            owner := getattr(box, 'static_control_label', None)) is not None:
+        if _spoken_cues(box)[1] is None and any(
+                descendant.element is owner[0] and
+                _is_static_control(descendant, tags)
+                for descendant in box.descendants(placeholders=True)):
+            label_control = owner
+    if label_control is not None or (static_control and form_context is None):
         tag = 'Form'
     roles = _aria_roles(box)
     if 'doc-footnote' in roles and tag in ('P', 'Div', 'Sect', 'Span', 'NonStruct'):
@@ -537,7 +587,7 @@ def _build_box_tree(
                     table_structure_elements, table_header_elements,
                     fragmented_table_elements, figure_elements,
                     pending_figure_captions, table_context, figure_context,
-                    link_context)
+                    link_context, form_context)
             return
     elif isinstance(box, boxes.MarginBox):
         # Build tree for margin boxes but don’t link it to main tree. It ensures that
@@ -556,7 +606,7 @@ def _build_box_tree(
                 table_structure_elements, table_header_elements,
                 fragmented_table_elements, figure_elements,
                 pending_figure_captions, table_context, figure_context,
-                link_context))
+                link_context, form_context))
         return
     elif tag in ('TD', 'TH'):
         # Ignore anonymous blocks created for table cells.
@@ -599,7 +649,7 @@ def _build_box_tree(
                 table_structure_elements, table_header_elements,
                 fragmented_table_elements, figure_elements,
                 pending_figure_captions, table_context, figure_context,
-                link_context)
+                link_context, form_context)
             for child in children:
                 parent['K'].append(child.reference)
             yield parent
@@ -727,20 +777,20 @@ def _build_box_tree(
             cue = cues['line-through']
             element['ActualText'] = pydyf.String(f'{cue}: {text}' if text else cue)
 
-    if static_control:
-        control_type = box.element.get('type').lower()
-        checked = 'checked' in box.element.attrib
-        element['A'] = pydyf.Dictionary({
-            'O': '/PrintField',
-            'Role': '/cb' if control_type == 'checkbox' else '/rb',
-            'checked': '/on' if checked else '/off',
-        })
-        if box.static_control_name:
-            element['A']['Desc'] = pydyf.String(box.static_control_name)
-        cues, cue_language = _spoken_cues(box)
-        element['Alt'] = pydyf.String(cues[control_type][0 if checked else 1])
-        if cue_language is not None:
-            element['Lang'] = pydyf.String(cue_language)
+    if label_control is not None:
+        control, spoken, name = label_control
+        cues, _ = _spoken_cues(box)
+        _set_static_control_attributes(
+            element, control, name, cues, _spoken_label(spoken, cues['line-through']))
+        form_context = element
+    elif static_control:
+        # Inside its label's Form, the control is only painted content.
+        if form_context is None:
+            cues, cue_language = _spoken_cues(box)
+            _set_static_control_attributes(
+                element, box.element, box.static_control_name, cues)
+            if cue_language is not None:
+                element['Lang'] = pydyf.String(cue_language)
         if control_content:
             element['K'].append(_add_marked_content(
                 element, tags.pop(box), page_number, nums, form_nums, pdf))
@@ -819,7 +869,7 @@ def _build_box_tree(
                     table_structure_elements, table_header_elements,
                     fragmented_table_elements, figure_elements,
                     pending_figure_captions, table_context, figure_context,
-                    link_context))
+                    link_context, form_context))
                 child_index = _table_child_insert_index(
                     child_parent, child_elements, table_structure_elements,
                     table_context, child_index)

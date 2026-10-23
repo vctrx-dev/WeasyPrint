@@ -83,7 +83,7 @@ def build_formatting_structure(element_tree, style_for, get_image_from_uri,
     box = set_viewport_overflow(box)
     # Names need the complete DOM and computed styles, not page-local text.
     # The name on each control survives pagination and Document.copy().
-    control_names = get_static_control_names(element_tree, style_for)
+    control_names, control_labels = get_static_control_names(element_tree, style_for)
     hidden_roots = _get_artifact_roots(element_tree)
     struck = {
         child for element in element_tree.iter()
@@ -91,6 +91,9 @@ def build_formatting_structure(element_tree, style_for, get_image_from_uri,
     for descendant in box.descendants():
         if descendant.element_tag == 'input':
             descendant.static_control_name = control_names.get(descendant.element)
+        if (owner := control_labels.get(descendant.element)) is not None:
+            control, spoken = owner
+            descendant.static_control_label = (control, spoken, control_names[control])
         if (root := hidden_roots.get(descendant.element)) is not None:
             descendant.is_artifact = True
             descendant.pagination_artifact = {

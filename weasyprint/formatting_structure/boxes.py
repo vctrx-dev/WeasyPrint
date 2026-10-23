@@ -84,6 +84,8 @@ class Box:
     pagination_artifact = None
     # Inside del, s or strike: even blank text paints a meaningful strike line.
     is_struck = False
+    # A label wrapping one checkbox or radio: (control, spoken label, name).
+    static_control_label = None
     has_rendered_table_header = False
 
     # Other properties

@@ -828,6 +828,21 @@ def _structure_descendant_roles(objects, reference):
         yield from _structure_descendant_roles(objects, child_reference)
 
 
+def _structure_mcids(objects, reference):
+    """Return the page marked-content IDs owned by a structure subtree."""
+    children = re.search(rb'/K \[([^]]*)\]', objects[reference])
+    if children is None:
+        return []
+    mcids = []
+    for child_reference, mcid in re.findall(
+            rb'(\d+ 0 R)|(\d+)', children.group(1)):
+        if mcid:
+            mcids.append(int(mcid))
+        elif child_reference in objects:
+            mcids.extend(_structure_mcids(objects, child_reference))
+    return mcids
+
+
 @pytest.mark.parametrize(
     ('cell_tag', 'attributes', 'content', 'content_role'), [
         ('td', '', '<p>paragraph</p>', b'P'),
@@ -2560,20 +2575,21 @@ def test_pdf_tags_static_native_control(input_type, role, checked, style):
 
 @assert_no_logs
 @pytest.mark.parametrize(('lang', 'input_type', 'checked', 'alt', 'alt_lang'), [
-    ('en', 'checkbox', True, 'check box, checked', None),
-    ('en-US', 'checkbox', False, 'check box, not checked', None),
-    ('en', 'radio', True, 'radio button, selected', None),
-    ('en', 'radio', False, 'radio button, not selected', None),
-    ('es', 'checkbox', True, 'casilla de verificación, marcada', None),
-    ('es-MX', 'checkbox', False, 'casilla de verificación, sin marcar', None),
-    ('fr', 'checkbox', True, 'case à cocher, cochée', None),
-    ('de', 'radio', False, 'Optionsfeld, nicht ausgewählt', None),
+    ('en', 'checkbox', True, 'Choice, check box, checked', None),
+    ('en-US', 'checkbox', False, 'Choice, check box, not checked', None),
+    ('en', 'radio', True, 'Choice, radio button, selected', None),
+    ('en', 'radio', False, 'Choice, radio button, not selected', None),
+    ('es', 'checkbox', True, 'Choice, casilla de verificación, marcada', None),
+    ('es-MX', 'checkbox', False, 'Choice, casilla de verificación, sin marcar', None),
+    ('fr', 'checkbox', True, 'Choice, case à cocher, cochée', None),
+    ('de', 'radio', False, 'Choice, Optionsfeld, nicht ausgewählt', None),
     ('ja', 'checkbox', True, 'check box, checked', 'en'),
 ])
 def test_pdf_tags_static_native_control_state_is_spoken(
         lang, input_type, checked, alt, alt_lang):
     # Screen readers ignore PrintField attributes, so a static control's
-    # state is lost unless the Form element also carries spoken text.
+    # state is lost unless the Form element also carries spoken text. The
+    # wrapping label speaks its text first, except where no cues exist.
     state = 'checked' if checked else ''
     pdf = HTML(string=f'''
       <html lang="{lang}"><title>Static control</title><body>
@@ -2597,6 +2613,106 @@ def _pdf_text_string(body, key):
         return data[2:].decode('utf-16-be')
     if match := re.search(rb'/' + key + rb' \(((?:[^()\\]|\\.)*)\)', body):
         return re.sub(rb'\\(.)', rb'\1', match.group(1)).decode('latin-1')
+
+
+def _static_control_paint_owner(objects):
+    """Return the Form, and the element in its subtree owning the paint."""
+    form = next(
+        reference for reference, body in objects.items()
+        if re.search(rb'/S /Form(?:/|>>)', body))
+    pending = [form]
+    while pending:
+        reference = pending.pop()
+        body = objects.get(reference, b'')
+        if b'/Stm ' in body:
+            return form, reference, body
+        if children := re.search(rb'/K \[([^]]*)\]', body):
+            pending.extend(re.findall(rb'\d+ 0 R', children[1]))
+
+
+def _static_control_forms(pdf):
+    objects = _pdf_structure_objects(pdf)
+    return objects, [
+        (reference, body) for reference, body in objects.items()
+        if re.search(rb'/S /Form(?:/|>>)', body)]
+
+
+@assert_no_logs
+@pytest.mark.parametrize(('label', 'input_type', 'checked', 'alt'), [
+    ('<label style="display:block">{control} Yes</label>',
+     'checkbox', True, 'Yes, check box, checked'),
+    ('<label style="display:table"><span style="display:table-cell">{control}'
+     '</span><span style="display:table-cell">Yes</span></label>',
+     'checkbox', False, 'Yes, check box, not checked'),
+    ('<label>{control} Yes</label>', 'radio', True, 'Yes, radio button, selected'),
+])
+def test_pdf_tags_static_control_label_is_one_spoken_form(
+        label, input_type, checked, alt):
+    # A state without its option ("check box, checked") leaves the choice
+    # unknown, and a separate label would be read again. A label wrapping
+    # one static control is that control's Form: option and state together.
+    control = f'<input type="{input_type}" {"checked" if checked else ""}>'
+    pdf = HTML(string=f'''
+      <html lang="en"><title>Choice</title><body>
+        {label.format(control=control)}
+      </body></html>
+    ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    objects, forms = _static_control_forms(pdf)
+    assert len(forms) == 1
+    reference, form = forms[0]
+    assert _pdf_text_string(form, b'Alt') == alt
+    assert b'/O /PrintField' in form
+    assert b'/Desc (Yes)' in form
+    assert f'/checked /{"on" if checked else "off"}'.encode() in form
+    # The painted box and the label text are both owned by the Form.
+    assert sorted(_structure_mcids(objects, reference)) == sorted(
+        int(mcid) for mcid in re.findall(rb'/MCID (\d+)', pdf))
+
+
+@assert_no_logs
+@pytest.mark.parametrize(('content', 'alt'), [
+    ('<label style="display:block"><input type="checkbox">'
+     '<del>No</del><span>JB</span></label>',
+     'crossed out: No, JB, check box, not checked'),
+    ('<label style="display:block"><input type="checkbox">'
+     'Yes, how many <del>&nbsp;</del> JB</label>',
+     'Yes, how many crossed out, JB, check box, not checked'),
+    ('<p><del><label>No<input type="checkbox"></label></del></p>',
+     'crossed out: No, check box, not checked'),
+])
+def test_pdf_tags_static_control_label_speaks_crossed_out_words(content, alt):
+    pdf = HTML(string=f'''
+      <html lang="en"><title>Correction</title><body>{content}</body></html>
+    ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    _, forms = _static_control_forms(pdf)
+    assert [_pdf_text_string(form, b'Alt') for _, form in forms] == [alt]
+
+
+@assert_no_logs
+@pytest.mark.parametrize(('content', 'lang', 'name'), [
+    # Wrapped across lines, the label has one box per line.
+    ('<p style="width:60px"><label>Choice one two three four five'
+     '<input type="checkbox"></label></p>',
+     'en', 'Choice one two three four five'),
+    # A link inside the label needs its own structure owner.
+    ('<label style="display:block"><input type="checkbox">'
+     '<a href="#terms">Terms</a></label><p id="terms">Terms</p>', 'en', 'Terms'),
+    # The control is named by its own attribute, not by the label text.
+    ('<label style="display:block"><input type="checkbox" '
+     'aria-label="Spoken">Visible</label>', 'en', 'Spoken'),
+    # No spoken cues exist for this language.
+    ('<label style="display:block"><input type="checkbox">Sentaku</label>',
+     'ja', 'Sentaku'),
+])
+def test_pdf_tags_static_control_label_kept_separate(content, lang, name):
+    pdf = HTML(string=f'''
+      <html lang="{lang}"><title>Choice</title><body>{content}</body></html>
+    ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
+    _, forms = _static_control_forms(pdf)
+    assert len(forms) == 1
+    form = forms[0][1]
+    assert _pdf_text_string(form, b'Alt') == 'check box, not checked'
+    assert _pdf_text_string(form, b'Desc') == name
 
 
 @assert_no_logs
@@ -2704,7 +2820,8 @@ def test_pdf_tags_line_through_never_hides_a_control_or_image():
     control = next(
         body for body in _pdf_structure_objects(pdf).values()
         if re.search(rb'/S /Form(?:/|>>)', body))
-    assert _pdf_text_string(control, b'Alt') == 'check box, not checked'
+    assert _pdf_text_string(control, b'Alt') == (
+        'crossed out: No, check box, not checked')
 
 
 @assert_no_logs
@@ -3032,9 +3149,7 @@ def test_pdf_tags_static_native_control_decorations(style, extra, input_type, ch
     assert re.search(rb'/Artifact\s+BMC.*?\bf\*?\b.*?EMC',
                      pdf[appearance.end():], re.S)
     objects = _pdf_structure_objects(pdf)
-    reference, control = next(
-        (reference, body) for reference, body in objects.items()
-        if re.search(rb'/S /Form(?:/|>>)', body))
+    _, reference, control = _static_control_paint_owner(objects)
     stream_reference = re.search(rb'/Stm (\d+ 0 R)', control)[1]
     assert b'/StructParents ' in objects[stream_reference]
     assert any(b'/Nums' in body and reference in body for body in objects.values())
@@ -3138,7 +3253,8 @@ def test_pdf_tags_static_native_control_pseudo_paint(
         assert b'/Desc (Choice)' in pdf
         assert f'/checked /{"on" if checked else "off"}'.encode() in pdf
         assert b'/Artifact' not in appearances[0]
-        assert re.search(rb'\bf\b', appearances[0])
+        # A filled shape, or the check mark image of a checked checkbox.
+        assert re.search(rb'\b(?:f|Do)\b', appearances[0])
 
 
 @assert_no_logs
@@ -3187,9 +3303,7 @@ def test_pdf_tags_static_native_control_nested_opacity(style, appearance):
       style="{style};{appearance}"></label></div>
     ''').write_pdf(pdf_tags=True, pdf_variant='pdf/ua-1', uncompressed_pdf=True)
     objects = _pdf_structure_objects(pdf)
-    reference, control = next(
-        (reference, body) for reference, body in objects.items()
-        if re.search(rb'/S /Form(?:/|>>)', body))
+    _, reference, control = _static_control_paint_owner(objects)
     stream = re.search(rb'/Stm (\d+ 0 R)', control)
     assert stream
     group = objects[stream[1]]

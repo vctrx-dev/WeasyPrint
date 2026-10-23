@@ -4,12 +4,20 @@ from collections import defaultdict
 
 from .. import html
 
+# Bracket crossed-out words in a spoken label, for a cue in the content language.
+STRUCK_START, STRUCK_END = '', ''
+STRUCK_TAGS = ('del', 's', 'strike')
+
 
 def get_static_control_names(root, style_for):
     """Resolve HTML labels and textual ARIA names, not the full AccName algorithm.
 
     CSS-generated content and embedded control values are not resolved here.
     Never infer a name from nearby text, a submission name, or a checkbox value.
+
+    Return the control names, and the labels that wrap and name exactly one
+    checkbox or radio control, mapped to that control and to the label text
+    with crossed-out words bracketed.
     """
     elements = tuple(root.iter())
     ids = {}
@@ -42,7 +50,7 @@ def get_static_control_names(root, style_for):
         return (hidden_subtree(element) or
                 style_for(element)['visibility'] != 'visible')
 
-    def text(element, include_hidden=False):
+    def text(element, include_hidden=False, mark_struck=False):
         if not isinstance(element.tag, str) or (
                 not include_hidden and hidden_subtree(element)):
             return ''
@@ -55,14 +63,20 @@ def get_static_control_names(root, style_for):
             return ' '
         if element.tag == 'input':
             return ''
+        struck = mark_struck and element.tag in STRUCK_TAGS
         result = (element.text or '') if visible else ''
         for child in element:
-            child_text = text(child, include_hidden)
+            child_text = text(child, include_hidden, mark_struck and not struck)
             style = style_for(child) if isinstance(child.tag, str) else None
             if style is not None and style['display'][0] not in ('inline', 'none'):
                 child_text = f' {child_text} '
             result += child_text + ((child.tail or '') if visible else '')
-        return result
+        return f'{STRUCK_START}{result}{STRUCK_END}' if struck else result
+
+    def struck_ancestor(element):
+        parent = parents.get(element)
+        return parent is not None and (
+            parent.tag in STRUCK_TAGS or struck_ancestor(parent))
 
     labels = defaultdict(list)
     for label in elements:
@@ -76,7 +90,7 @@ def get_static_control_names(root, style_for):
         if labelable(control):
             labels[control].append(label)
 
-    names = {}
+    names, label_owners = {}, {}
     for element in elements:
         if (element.tag != 'input' or
                 element.get('type', '').lower() not in ('checkbox', 'radio') or
@@ -93,7 +107,19 @@ def get_static_control_names(root, style_for):
             pass
         elif element in labels:
             name = ' '.join(text(label, hidden(label)) for label in labels[element])
+            label = labels[element][0]
+            # A link or another control in the label keeps its own semantics.
+            if len(labels[element]) == 1 and element in label.iter() and not any(
+                    child is not element and (
+                        labelable(child) or
+                        (child.tag == 'a' and child.get('href') is not None))
+                    for child in label.iter()):
+                spoken = text(label, hidden(label), mark_struck=True)
+                if struck_ancestor(label):
+                    spoken = STRUCK_START + spoken.replace(
+                        STRUCK_START, '').replace(STRUCK_END, '') + STRUCK_END
+                label_owners[label] = (element, ' '.join(spoken.split()))
         else:
             name = element.get('title', '')
         names[element] = ' '.join(name.split())
-    return names
+    return names, label_owners
