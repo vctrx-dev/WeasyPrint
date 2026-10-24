@@ -1,6 +1,7 @@
 """Render SVG images."""
 
 import re
+from collections import deque
 from contextlib import suppress
 from math import cos, hypot, pi, radians, sin, sqrt
 from xml.etree import ElementTree
@@ -94,7 +95,7 @@ class Node:
 
         self.attrib = wrapper.etree_element.attrib.copy()
 
-        self.vertices = []
+        self.vertices = deque()
         self.bounding_box = None
 
     def copy(self):
@@ -560,7 +561,7 @@ class SVG:
 
         # Restore concrete and inner size of root svg tag
         if node.tag == 'svg':
-            self.tree.set_svg_size(svg, concrete_width, concrete_height)
+            self.tree.set_svg_size(self, concrete_width, concrete_height)
 
         # Handle text anchor
         if text_anchor_shift:
@@ -633,8 +634,8 @@ class SVG:
 
         while node.vertices:
             # Calculate position and angle
-            point = node.vertices.pop(0)
-            angles = node.vertices.pop(0) if node.vertices else None
+            point = node.vertices.popleft()
+            angles = node.vertices.popleft() if node.vertices else None
             if angles:
                 if position == 'start':
                     angle = pi - angles[0]
