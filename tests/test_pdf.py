@@ -1033,6 +1033,46 @@ def _semantic_structure_roles(pdf, roles):
     return [role for role in _document_structure_roles(pdf) if role in roles]
 
 
+@assert_no_logs
+def test_pdf_tags_heading_with_block_child_has_one_heading():
+    pdf = FakeHTML(string='''
+      <html lang="en"><body>
+        <h1>County<span style="display:block">Department</span> Services</h1>
+        <h2>Requirements</h2>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    assert _semantic_structure_roles(pdf, (b'H1', b'H2')) == [b'H1', b'H2']
+    objects = _pdf_structure_objects(pdf)
+    heading = next(
+        reference for reference, body in objects.items()
+        if re.search(rb'/S /H1(?:/|>>)', body))
+    assert len(_structure_mcids(objects, heading)) == 3
+
+
+@assert_no_logs
+def test_pdf_tags_table_display_list_items_do_not_duplicate_items():
+    pdf = FakeHTML(string='''
+      <html lang="en"><head><style>
+        ul { list-style:none; padding:0 }
+        li, label { display:table }
+        span { display:table-cell }
+      </style></head><body>
+        <ul><li><label><span>mark</span><span>First</span></label>
+          <ul><li><span>Nested</span></li></ul>
+        </li><li><label><span>mark</span><span>Second</span></label></li></ul>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    assert _semantic_structure_roles(pdf, (b'LI',)) == [b'LI'] * 3
+    objects = _pdf_structure_objects(pdf)
+    for body in objects.values():
+        if not re.search(rb'/S /LI(?:/|>>)', body):
+            continue
+        parent = re.search(rb'/P (\d+ 0 R)', body).group(1)
+        while b'/S /NonStruct/' in objects[parent]:
+            parent = re.search(rb'/P (\d+ 0 R)', objects[parent]).group(1)
+        assert re.search(rb'/S /L(?:/|>>)', objects[parent])
+
+
 @pytest.mark.parametrize('flow_first', [True, False])
 @assert_no_logs
 def test_pdf_tags_flex_out_of_flow_child_keeps_source_order(flow_first):

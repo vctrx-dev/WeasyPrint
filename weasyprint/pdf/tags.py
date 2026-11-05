@@ -608,10 +608,16 @@ def _build_box_tree(
         # Ignore anonymous blocks created for table cells.
         if parent['S'] in ('/TD', '/TH'):
             tag = 'NonStruct'
+    elif tag in ('H1', 'H2', 'H3', 'H4', 'H5', 'H6'):
+        # Anonymous blocks keep their source heading's element tag. Their text
+        # belongs to the existing heading, including through neutral wrappers.
+        if _semantic_container(parent, pdf)['S'] == f'/{tag}':
+            tag = 'NonStruct'
     elif tag == 'LI':
         # Ignore anonymous blocks created for lists and bullets.
-        anonymous_list_element = parent['S'] == '/LI'
-        anonymous_li_child = parent['S'] == '/LBody'
+        semantic_parent = _semantic_container(parent, pdf)
+        anonymous_list_element = semantic_parent['S'] == '/LI'
+        anonymous_li_child = semantic_parent['S'] == '/LBody'
         dl_item = box.element_tag in ('dt', 'dd')
         no_bullet_li = box.element_tag == 'li' and (
             'list-item' not in box.style['display'] or
