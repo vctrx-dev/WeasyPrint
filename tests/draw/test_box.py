@@ -1,6 +1,7 @@
 """Test how boxes, borders, outlines are drawn."""
 
 import itertools
+import re
 
 import pytest
 
@@ -151,6 +152,55 @@ def test_borders_box_sizing(assert_pixels):
       </style>
       <div></div>
     ''')
+
+
+@assert_no_logs
+def test_borders_solid_sides(assert_pixels):
+    assert_pixels('''
+        ________
+        ______R_
+        ______R_
+        _RRRRRR_
+        ________
+    ''', '''
+      <style>
+        @page {
+          size: 8px 5px;
+        }
+        div {
+          border-bottom: 1px solid red;
+          border-right: 1px solid red;
+          height: 2px;
+          margin: 1px;
+          width: 5px;
+        }
+      </style>
+      <div></div>
+    ''')
+
+
+@assert_no_logs
+@pytest.mark.parametrize(('style', 'rectangles'), [
+    ('border-bottom: 0.75px solid', 1),
+    ('border-width: 0 1px 2px 0; border-style: solid; color: rgba(0, 0, 0, 0.5)', 2),
+])
+def test_borders_solid_sides_fill_plain_rectangles(style, rectangles):
+    # Paperlyft: a side clipped to its trapezoid, then filled, was antialiased
+    # twice, so thin rules changed darkness with their sub-pixel position.
+    def stream(css):
+        pdf = HTML(string=(
+            '<style>@page { size: 100px }</style>'
+            f'<div style="margin: 3.3px; width: 50.3px; height: 10.6px; {css}">'
+        )).write_pdf(uncompressed_pdf=True)
+        return b''.join(re.findall(rb'stream\n(.*?)endstream', pdf, re.S))
+
+    plain, bordered = stream(''), stream(style)
+    clips = rb'\bW\*?\s+n\b'
+    assert len(re.findall(clips, bordered)) == len(re.findall(clips, plain))
+    added = len(re.findall(rb'\bre\b', bordered)) - len(re.findall(rb'\bre\b', plain))
+    assert added == rectangles
+    # One nonzero fill paints shared corners once, so translucent rules keep their alpha.
+    assert len(re.findall(rb'\bf\b', bordered)) - len(re.findall(rb'\bf\b', plain)) == 1
 
 
 @assert_no_logs

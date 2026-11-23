@@ -1050,6 +1050,31 @@ def test_pdf_tags_heading_with_block_child_has_one_heading():
 
 
 @assert_no_logs
+@pytest.mark.parametrize('pages', (1, 2))
+def test_pdf_tags_wrapped_inline_heading_has_one_heading(pages):
+    # A run-in heading wraps onto several lines, here also over a page break.
+    # Each line fragment of the heading used to open another heading element.
+    page_height = '30px' if pages == 2 else '400px'
+    pdf = FakeHTML(string=f'''
+      <html lang="en"><head><style>
+        @page {{ size: 200px {page_height}; margin: 0 }}
+        body {{ font: 10px/12px weasyprint }}
+        h2 {{ display: inline; font-size: 10px }}
+      </style></head><body>
+        <div><h2>One two three four five six seven eight nine ten</h2>
+        <span>then running text</span></div>
+        <h2>Next</h2>
+      </body></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    assert _semantic_structure_roles(pdf, (b'H2',)) == [b'H2', b'H2']
+    objects = _pdf_structure_objects(pdf)
+    heading = next(
+        reference for reference, body in objects.items()
+        if re.search(rb'/S /H2(?:/|>>)', body))
+    assert len(_structure_mcids(objects, heading)) >= 2
+
+
+@assert_no_logs
 def test_pdf_tags_table_display_list_items_do_not_duplicate_items():
     pdf = FakeHTML(string='''
       <html lang="en"><head><style>
@@ -1688,6 +1713,29 @@ def test_pdf_tags_colgroup_scope_associates_spanning_cells_in_each_group():
         body for body in objects if re.search(rb'/S /TD(?:/|>>)', body))
     assert set(re.findall(rb'\(([^)]*)\)', re.search(
         rb'/Headers \[([^]]*)\]', table_cell).group(1))) == header_ids
+
+
+@pytest.mark.parametrize('hidden', [
+    '<th id="hidden" scope="col" aria-hidden="true">Hidden</th>',
+    '<td headers="visible" aria-hidden="true"></td>',
+    '<td aria-hidden="true"></td>',
+])
+def test_pdf_tags_hidden_table_cells_do_not_create_header_links(hidden):
+    pdf = FakeHTML(string=f'''
+      <html lang="en"><table>
+        <tr><th id="visible" scope="col">Visible</th>{hidden}</tr>
+        <tr><td headers="visible">Value</td></tr>
+        <tr aria-hidden="true"><td>Decorative separator</td></tr>
+      </table></html>
+    ''').write_pdf(pdf_tags=True, uncompressed_pdf=True)
+    objects = re.findall(rb'\d+ 0 obj\n(.*?)\nendobj', pdf, re.S)
+    headers = [body for body in objects if re.search(rb'/S /TH(?:/|>>)', body)]
+    cells = [body for body in objects if re.search(rb'/S /TD(?:/|>>)', body)]
+    assert len(headers) == len(cells) == 1
+    visible_id = re.search(rb'/ID \(([^)]*)\)', headers[0]).group(1)
+    linked = re.findall(rb'\(([^)]*)\)', re.search(
+        rb'/Headers \[([^]]*)\]', cells[0]).group(1))
+    assert linked == [visible_id]
 
 
 def test_pdf_tags_table_headers_follow_html_scope_order():

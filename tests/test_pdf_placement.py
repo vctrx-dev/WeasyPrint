@@ -119,3 +119,22 @@ def test_neutral_wrappers_in_cells_keep_table_semantics():
     assert not any(b'/S /P/' in body for body in objects.values())
     assert sum(b'/S /TH/' in body for body in objects.values()) == 1
     assert sum(b'/S /TD/' in body for body in objects.values()) == 1
+
+
+@assert_no_logs
+@pytest.mark.parametrize(('content', 'placement'), [
+    ('<div><input name="field" aria-label="Field"></div>', b'Block'),
+    ('<div><label>Name <input name="field"></label></div>', b'Block'),
+    ('<p>Name <input name="field" aria-label="Field"> today</p>', b'Inline'),
+    ('<p><label>Name <input name="field"></label></p>', b'Inline'),
+    ('<div><input type="checkbox" name="box" aria-label="Box"></div>', b'Block'),
+])
+def test_form_field_declares_logical_placement(content, placement):
+    # PAC warns on a Form element without Layout Placement (Navajo County, 2026-11-23).
+    pdf = FakeHTML(string=f'''
+      <html lang="en"><title>Fields</title>{content}
+    ''').write_pdf(pdf_tags=True, pdf_forms=True)
+    forms = [body for body in structure(pdf).values() if b'/S /Form' in body]
+    assert len(forms) == 1
+    assert b'/O /Layout' in forms[0]
+    assert b'/Placement /' + placement in forms[0]

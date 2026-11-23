@@ -424,6 +424,9 @@ def _add_widget_annotation(parent, annotation, pdf, page_number, annotations):
         'K': pydyf.Array(),
         'Pg': pdf.page_references[page_number],
         'P': parent.reference,
+        # A Form may be inline or block; checkers ask which (PAC warns).
+        'A': pydyf.Dictionary({
+            'O': '/Layout', 'Placement': _logical_placement(parent, pdf)}),
     })
     pdf.add_object(form_element)
     _add_annotation(form_element, annotation, pdf, page_number, annotations)
@@ -448,6 +451,13 @@ def _table_child_insert_index(
         if group_order.get(element_tags.get(reference), -1) > child_order:
             return index
     return len(parent['K'])
+
+
+def _logical_placement(parent, pdf):
+    """Inline within text, else a block of its grouping container."""
+    return '/Inline' if _semantic_container(parent, pdf)['S'] in (
+        '/P', '/Span', '/Link', '/Quote', '/H1', '/H2', '/H3',
+        '/H4', '/H5', '/H6') else '/Block'
 
 
 def _semantic_container(element, pdf):
@@ -670,6 +680,11 @@ def _build_box_tree(
             (tag == 'Caption' and isinstance(box, boxes.TableCaptionBox)))
     if table_context is not None and table_source_box and box.element is not None:
         table_structure_key = (table_context, tag, id(box.element))
+    elif (tag in ('H1', 'H2', 'H3', 'H4', 'H5', 'H6') and
+            isinstance(box, boxes.InlineBox) and box.element is not None):
+        # An inline heading split over lines or pages is one heading: each
+        # fragment's content joins the element opened by its first fragment.
+        table_structure_key = ('inline-heading', tag, id(box.element))
     element = table_structure_elements.get(table_structure_key)
     new_element = element is None
     if new_element:
@@ -704,9 +719,7 @@ def _build_box_tree(
             x2, y2 = tags.matrix.transform_point(x2, y2)
         element['A'] = pydyf.Dictionary({
             'O': '/Layout',
-            'Placement': '/Inline' if _semantic_container(parent, pdf)['S'] in (
-                '/P', '/Span', '/Link', '/Quote', '/H1', '/H2', '/H3',
-                '/H4', '/H5', '/H6') else '/Block',
+            'Placement': _logical_placement(parent, pdf),
             'BBox': pydyf.Array((
                 min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))),
         })
@@ -941,6 +954,9 @@ def _build_box_tree(
         for local_i, (row, row_group) in enumerate(rows):
             i = _get_row_index(row)
             for cell in row.children:
+                if not hasattr(cell, 'mark'):
+                    # Hidden cells have no structure element or header identity.
+                    continue
                 j = cell.grid_x
                 if cell.element is not None and cell.element_tag == 'th':
                     row_id = i if table_context is not None else local_i
@@ -990,6 +1006,8 @@ def _build_box_tree(
         for row, row_group in rows:
             i = _get_row_index(row)
             for cell in row.children:
+                if not hasattr(cell, 'mark'):
+                    continue
                 j = cell.grid_x
                 headers_attribute = (
                     cell.element.attrib.get('headers')

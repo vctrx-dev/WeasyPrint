@@ -111,6 +111,26 @@ def draw_border(stream, box, artifact=None):
             draw_dotted_dashed_border(stream, box, styles[0], widths[0], colors[0])
         return
 
+    # Paperlyft: solid sides of one color without rounded corners are filled as
+    # plain rectangles. Clipping each side to its trapezoid before filling it made
+    # renderers antialias the rule twice, so a thin underline or cell rule looked
+    # lighter or darker depending on its sub-pixel position. One nonzero fill
+    # paints overlapping corners once, so translucent colors keep their alpha.
+    drawn = [index for index, width in enumerate(widths) if width and styles[index]]
+    if (no_radii and drawn and {styles[index] for index in drawn} == {'solid'} and
+            len({colors[index] for index in drawn}) == 1):
+        x, y, width, height = box.rounded_border_box()[:4]
+        top, right, bottom, left = widths
+        sides = (
+            (x, y, width, top), (x + width - right, y, right, height),
+            (x, y + height - bottom, width, bottom), (x, y, left, height))
+        with artifact(), stream.stacked():
+            stream.set_color(colors[drawn[0]])
+            for index in drawn:
+                stream.rectangle(*sides[index])
+            stream.fill()
+        return
+
     # We're not smart enough to find a good way to draw the borders, we must
     # draw them side by side. Order is not specified, but this one seems to be
     # close to what other browsers do.
