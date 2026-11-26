@@ -520,6 +520,13 @@ def _build_box_tree(
         box = box._box
 
     if box.is_decorative_image or box.is_artifact:
+        # Hidden content inside a link, such as a dot leader, still carries
+        # the link's annotations: the enclosing Link element owns them.
+        if link_context is not None:
+            for descendant in box.descendants(placeholders=True):
+                for annotation in _get_link_annotations(descendant, tags):
+                    _add_annotation(
+                        link_context, annotation, pdf, page_number, annotations)
         return
 
     if box.is_repeated_table_header:

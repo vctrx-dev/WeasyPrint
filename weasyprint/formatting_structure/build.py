@@ -1061,6 +1061,11 @@ def blockify(box, layout=None):
     else:
         return box
     anonymous.style = box.style
+    if not isinstance(box, boxes.TextBox):
+        # The block replaces the inline box: keep what its element gave it.
+        anonymous.link = box.link
+        anonymous.bookmark_label = box.bookmark_label
+        anonymous.string_set = box.string_set
     if layout:
         setattr(anonymous, f'is_{layout}_item', True)
     return anonymous

@@ -2057,6 +2057,11 @@ def test_pdf_tags_repeated_table_headers_are_artifacts():
 @pytest.mark.parametrize('content', [
     'first line<br>second line',
     '<img src="pattern.png" alt="Pattern" style="width: 20px; height: 20px">',
+    # A hidden dot leader and a decorative image are artifacts, but the link's
+    # annotations over them still need the Link element as their owner.
+    'Section<span aria-hidden="true" style="display: inline-block; '
+    'width: 20px; height: 1px; border-bottom: 1px dotted"></span>4',
+    '<img src="pattern.png" alt="" style="width: 20px; height: 20px">Pattern',
 ])
 def test_pdf_tags_annotations_inside_link_belong_to_link(content):
     # Boxes inside a link (line breaks, images) get their own link annotations.
@@ -2078,6 +2083,41 @@ def test_pdf_tags_annotations_inside_link_belong_to_link(content):
         struct_parent = re.search(rb'/StructParent (\d+)', annotation).group(1)
         owner = objects[owners[struct_parent].split()[0]]
         assert b'/S /Link' in owner
+
+
+@assert_no_logs
+@pytest.mark.parametrize('display', ['flex', 'grid'])
+@pytest.mark.parametrize('pdf_tags', [False, True])
+def test_flex_and_grid_item_links_are_clickable(display, pdf_tags):
+    # A link that is a flex or grid item is blockified into a new box, which
+    # must keep the link: a table of contents laid out with flex had none.
+    pdf = FakeHTML(string=f'''
+      <html lang="en"><body>
+        <p style="display: {display}"><a href="#target">Section</a><span>4</span></p>
+        <p style="display: {display}"><a href="https://example.test">Site</a></p>
+        <h2 id="target">Section</h2>
+      </body></html>
+    ''').write_pdf(pdf_tags=pdf_tags, uncompressed_pdf=True)
+    objects = dict(re.findall(rb'(\d+) 0 obj\n(.*?)\nendobj', pdf, re.S))
+    annotations = [
+        body for body in objects.values() if b'/Subtype /Link' in body]
+    assert len(annotations) == 2
+    assert sum(b'/Dest ' in body for body in annotations) == 1
+    assert sum(b'/URI (https://example.test)' in body for body in annotations) == 1
+    if pdf_tags:
+        assert all(b'/StructParent ' in body for body in annotations)
+
+
+@assert_no_logs
+def test_flex_item_keeps_its_bookmark():
+    document = FakeHTML(string='''
+      <html lang="en"><body>
+        <p style="display: flex">
+          <span style="bookmark-level: 1; bookmark-label: 'Flex item'">One</span>
+        </p>
+      </body></html>
+    ''').render()
+    assert [label for label, *_ in document.make_bookmark_tree()] == ['Flex item']
 
 
 def test_pdf_tags_repeated_document_writes_keep_link_owners():
